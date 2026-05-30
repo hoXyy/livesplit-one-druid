@@ -219,6 +219,10 @@ impl<T: Widget<State>> Widget<State> for AddComponentWidget<T> {
             ctx.show_context_menu::<MainState>(
                 Menu::new(LocalizedString::new("Components"))
                     .entry(
+                        MenuItem::new(LocalizedString::new("Alternate Timing Method"))
+                            .command(ADD_COMPONENT_ALTERNATE_TIMING_METHOD),
+                    )
+                    .entry(
                         MenuItem::new(LocalizedString::new("Current Comparison"))
                             .command(ADD_COMPONENT_CURRENT_COMPARISON),
                     )
@@ -283,7 +287,9 @@ impl<T: Widget<State>> Widget<State> for AddComponentWidget<T> {
             );
             return;
         } else if let Event::Command(command) = event {
-            if command.is(ADD_COMPONENT_CURRENT_COMPARISON) {
+            if command.is(ADD_COMPONENT_ALTERNATE_TIMING_METHOD) {
+                data.mutate(|editor| editor.add_component(component::AlternateTimingMethod::new()));
+            } else if command.is(ADD_COMPONENT_CURRENT_COMPARISON) {
                 data.mutate(|editor| editor.add_component(component::CurrentComparison::new()));
             } else if command.is(ADD_COMPONENT_CURRENT_PACE) {
                 data.mutate(|editor| editor.add_component(component::CurrentPace::new()));
@@ -434,6 +440,8 @@ impl<T: Widget<ComponentRow>> Widget<ComponentRow> for ComponentRowWidget<T> {
     }
 }
 
+const ADD_COMPONENT_ALTERNATE_TIMING_METHOD: Selector =
+    Selector::new("layout-editor-add-alternate-timing-method");
 const ADD_COMPONENT_CURRENT_COMPARISON: Selector =
     Selector::new("layout-editor-add-current-comparison");
 const ADD_COMPONENT_CURRENT_PACE: Selector = Selector::new("layout-editor-add-current-pace");
