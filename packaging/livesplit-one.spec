@@ -3,7 +3,7 @@
 Name: livesplit-one
 Version: 0.7.2
 Release: 1%{?date}.git%{?commit_short}%{?dist}
-Summary: A desktop LiveSplit One timer for speedrunners
+Summary: A desktop version of LiveSplit One (hoxi's fork).
 
 License: MIT
 URL: https://github.com/hoXyy/livesplit-one-druid
@@ -20,8 +20,7 @@ BuildRequires:  desktop-file-utils
 Requires:       libgtk-3
 
 %description
-A prototype Desktop version of LiveSplit One, using the Druid framework.
-LiveSplit One is a timer for speedrunners.
+A desktop version of LiveSplit One (hoxi's fork).
 
 %prep
 %setup -qn %{srcname}-%{commit}
