@@ -20,7 +20,7 @@ Source0: https://github.com/hoXyy/%{srcname}/archive/%{srcver}/%{srcname}-%{srcv
 BuildRequires:  cargo
 BuildRequires:  rust
 BuildRequires:  git
-BuildRequires:  libgtk-3-devel
+#BuildRequires:  libgtk-3-devel
 BuildRequires:  pkgconfig
 BuildRequires:  desktop-file-utils
 
