@@ -31,9 +31,8 @@ A prototype Desktop version of LiveSplit One, using the Druid framework.
 LiveSplit One is a timer for speedrunners.
 
 %prep
-%setup -q -T -D -b 0
-tar xzf %{SOURCE0}
-cd livesplit-one-druid-*/
+%setup -T -c -n %{srcname}-%{version}
+zcat %{SOURCE0} | tar xf - --strip-components=1
 
 %build
 cargo build --release %{?_smp_mflags}
