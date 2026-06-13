@@ -4,7 +4,7 @@
 %global srcver %{commit}
 %global rel 1%{?date}.git%{?commit_short}%{?dist}
 %else
-%global srcver v%{version}
+%global srcver HEAD
 %global rel 1%{?dist}
 %endif
 
