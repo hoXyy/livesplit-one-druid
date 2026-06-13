@@ -43,7 +43,7 @@ zcat %{SOURCE0} | tar xf - --strip-components=1
 cargo build --release %{?_smp_mflags}
 
 %install
-install -Dpm 0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
+install -Dpm 0755 target/release/livesplit-one %{buildroot}%{_bindir}/%{name}
 install -Dpm 0644 packaging/%{name}.desktop %{buildroot}%{_datadir}/applications/%{name}.desktop
 install -Dpm 0644 icons/icon.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/%{name}.svg
 install -Dpm 0644 icons/icon.png %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/%{name}.png
