@@ -2,7 +2,7 @@
 Type=Application
 Name=LiveSplit One
 Comment=A desktop LiveSplit One timer for speedrunners
-Exec=livesplit-one
+Exec=livesplit-one-druid
 Icon=livesplit-one
 Categories=Game;Utility;
 Terminal=false
