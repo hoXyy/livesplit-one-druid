@@ -8,7 +8,7 @@
 %global rel 1%{?dist}
 %endif
 
-Name: livesplit-one
+Name: livesplit-one-druid
 Version: 0.7.2
 Release: %{rel}
 Summary: A desktop LiveSplit One timer for speedrunners
