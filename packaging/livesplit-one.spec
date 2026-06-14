@@ -2,11 +2,19 @@
 
 %if 0%{?commit:1}
 %global srcver %{commit}
-%global rel 1%{?date}.git%{?commit_short}%{?dist}
 %else
-%global srcver HEAD
-%global rel 1%{?dist}
+%global srcver %(git rev-parse HEAD 2>/dev/null || echo HEAD)
 %endif
+
+%if ! 0%{?commit_short:1}
+%global commit_short %(c=%{srcver}; if [ "$c" = HEAD ]; then git rev-parse --short HEAD 2>/dev/null || echo nogit; else printf '%s' "$c" | cut -c1-7; fi)
+%endif
+
+%if ! 0%{?date:1}
+%global date %(date +%Y%m%d)
+%endif
+
+%global rel 1.%{date}.git%{commit_short}%{?dist}
 
 Name: livesplit-one-druid
 Version: 0.7.2
