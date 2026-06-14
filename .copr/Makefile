@@ -5,13 +5,15 @@ date := $(shell date +%Y%m%d)
 outdir ?= $(CURDIR)
 spec ?= packaging/livesplit-one.spec
 archive := $(srcname)-$(commit).tar.gz
+generated_spec := $(outdir)/livesplit-one.spec
 
 .PHONY: srpm
 srpm:
+	printf '%%global commit %s\n' '$(commit)' > $(generated_spec)
+	printf '%%global commit_short %s\n' '$(commit_short)' >> $(generated_spec)
+	printf '%%global date %s\n\n' '$(date)' >> $(generated_spec)
+	cat $(spec) >> $(generated_spec)
 	tar --exclude-vcs --exclude='./target' --exclude='*.src.rpm' --exclude='*.tar.gz' --transform 's,^,$(srcname)-$(commit)/,' -czf $(outdir)/$(archive) .
-	rpmbuild -bs $(spec) \
+	rpmbuild -bs $(generated_spec) \
 		--define "_sourcedir $(outdir)" \
-		--define "_srcrpmdir $(outdir)" \
-		--define "commit $(commit)" \
-		--define "commit_short $(commit_short)" \
-		--define "date $(date)"
+		--define "_srcrpmdir $(outdir)"
