@@ -23,7 +23,7 @@ Summary: A desktop version of LiveSplit One (hoxi's fork).
 
 License: MIT
 URL: https://github.com/hoXyy/livesplit-one-druid
-Source0: https://github.com/hoXyy/%{srcname}/archive/%{srcver}/%{srcname}-%{srcver}.tar.gz
+Source0: %{srcname}-%{srcver}.tar.gz
 
 BuildRequires:  cargo
 BuildRequires:  rust
