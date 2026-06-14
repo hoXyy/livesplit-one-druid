@@ -1,4 +1,5 @@
 %global srcname livesplit-one-druid
+%global _disable_source_fetch 0
 
 %if 0%{?commit:1}
 %global srcver %{commit}
@@ -23,7 +24,7 @@ Summary: A desktop version of LiveSplit One (hoxi's fork).
 
 License: MIT
 URL: https://github.com/hoXyy/livesplit-one-druid
-Source0: %{srcname}-%{srcver}.tar.gz
+Source0: https://github.com/hoXyy/%{srcname}/archive/%{srcver}/%{srcname}-%{srcver}.tar.gz
 
 BuildRequires:  cargo
 BuildRequires:  rust
