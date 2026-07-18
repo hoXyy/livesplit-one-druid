@@ -274,6 +274,10 @@ impl<T: Widget<State>> Widget<State> for AddComponentWidget<T> {
                         MenuItem::new(LocalizedString::new("Total Playtime"))
                             .command(ADD_COMPONENT_TOTAL_PLAYTIME),
                     )
+                    .entry(
+                        MenuItem::new(LocalizedString::new("World Record"))
+                            .command(ADD_COMPONENT_WORLD_RECORD),
+                    )
                     .separator()
                     .entry(
                         MenuItem::new(LocalizedString::new("Blank Space"))
@@ -323,6 +327,8 @@ impl<T: Widget<State>> Widget<State> for AddComponentWidget<T> {
                 data.mutate(|editor| editor.add_component(component::Title::new()));
             } else if command.is(ADD_COMPONENT_TOTAL_PLAYTIME) {
                 data.mutate(|editor| editor.add_component(component::TotalPlaytime::new()));
+            } else if command.is(ADD_COMPONENT_WORLD_RECORD) {
+                data.mutate(|editor| editor.add_component(component::WorldRecord::new()));
             } else if command.is(ADD_COMPONENT_BLANK_SPACE) {
                 data.mutate(|editor| editor.add_component(component::BlankSpace::new()));
             } else if command.is(ADD_COMPONENT_SEPARATOR) {
@@ -461,6 +467,7 @@ const ADD_COMPONENT_TEXT: Selector = Selector::new("layout-editor-add-text");
 const ADD_COMPONENT_TIMER: Selector = Selector::new("layout-editor-add-timer");
 const ADD_COMPONENT_TITLE: Selector = Selector::new("layout-editor-add-title");
 const ADD_COMPONENT_TOTAL_PLAYTIME: Selector = Selector::new("layout-editor-add-total-playtime");
+const ADD_COMPONENT_WORLD_RECORD: Selector = Selector::new("layout-editor-add-world-record");
 const ADD_COMPONENT_BLANK_SPACE: Selector = Selector::new("layout-editor-add-blank-space");
 const ADD_COMPONENT_SEPARATOR: Selector = Selector::new("layout-editor-add-separator");
 

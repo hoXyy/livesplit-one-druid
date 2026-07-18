@@ -1,4 +1,9 @@
-use std::{collections::VecDeque, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use druid::{
     commands,
@@ -33,6 +38,7 @@ struct WithMenu<T> {
     inner: T,
     intent: Intent,
     intent_path: Option<Arc<Path>>,
+    pending_world_record_requests: HashMap<usize, Instant>,
 }
 
 impl<T> WithMenu<T> {
@@ -55,6 +61,7 @@ impl<T> WithMenu<T> {
             inner,
             intent: Intent::NONE,
             intent_path: None,
+            pending_world_record_requests: HashMap::new(),
         }
     }
 }
@@ -116,6 +123,8 @@ const CONTEXT_MENU_SET_TIMING_METHOD: Selector<TimingMethod> =
 const CONTEXT_MENU_EDIT_WINDOW_SETTINGS: Selector =
     Selector::new("context-menu-edit-window-settings");
 const CONTEXT_MENU_EDIT_HOTKEYS: Selector = Selector::new("context-menu-edit-hotkeys");
+const WORLD_RECORD_RESPONSE: Selector<(usize, String, Option<String>)> =
+    Selector::new("world-record-response");
 #[cfg(feature = "auto-splitting")]
 const CONTEXT_MENU_EDIT_AUTOSPLITTER_SETTINGS: Selector =
     Selector::new("context-menu-edit-autosplitter-settings");
@@ -124,8 +133,69 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut MainState, env: &Env) {
         match event {
             Event::AnimFrame(_) => {
+                if data.layout_editor.is_none() {
+                    let requests = {
+                        let timer = data.timer.read().unwrap();
+                        let snapshot = timer.snapshot();
+                        data.layout_data
+                            .borrow_mut()
+                            .layout
+                            .world_record_request_urls(&snapshot)
+                    };
+                    for (index, url) in requests {
+                        let should_request = self
+                            .pending_world_record_requests
+                            .get(&index)
+                            .map_or(true, |started| started.elapsed() >= Duration::from_secs(30));
+                        if should_request {
+                            self.pending_world_record_requests
+                                .insert(index, Instant::now());
+                            let sink = ctx.get_external_handle();
+                            std::thread::spawn(move || {
+                                let response = ureq::get(&url)
+                                    .call()
+                                    .ok()
+                                    .and_then(|response| response.into_string().ok());
+                                let _ = sink.submit_command(
+                                    WORLD_RECORD_RESPONSE,
+                                    (index, url, response),
+                                    druid::Target::Auto,
+                                );
+                            });
+                        }
+                    }
+                }
                 ctx.request_anim_frame();
                 ctx.request_paint();
+            }
+            Event::Command(command) if command.is(WORLD_RECORD_RESPONSE) => {
+                let (index, url, response) = command.get_unchecked(WORLD_RECORD_RESPONSE);
+                if let Some(response) = response {
+                    self.pending_world_record_requests.remove(index);
+                    let is_current_request = {
+                        let timer = data.timer.read().unwrap();
+                        let snapshot = timer.snapshot();
+                        data.layout_data
+                            .borrow_mut()
+                            .layout
+                            .world_record_request_urls(&snapshot)
+                            .into_iter()
+                            .any(|(request_index, request_url)| {
+                                request_index == *index && request_url == *url
+                            })
+                    };
+                    if is_current_request {
+                        data.layout_data
+                            .borrow_mut()
+                            .layout
+                            .world_record_parse_response(*index, response);
+                    }
+                } else {
+                    self.pending_world_record_requests
+                        .insert(*index, Instant::now());
+                }
+                ctx.request_paint();
+                return;
             }
             Event::Wheel(event) => {
                 if event.wheel_delta.y > 0.0 {
