@@ -371,6 +371,10 @@ impl Config {
         self.splits.current.is_some() && self.splits.can_save
     }
 
+    pub fn splits_path(&self) -> Option<&Path> {
+        self.splits.current.as_deref()
+    }
+
     pub fn save_splits(
         &mut self,
         timer: &mut Timer,

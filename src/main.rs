@@ -29,6 +29,7 @@ mod hotkey_button;
 mod hotkeys_editor;
 mod layout_editor;
 mod map_scope;
+mod notes_editor;
 mod run_editor;
 mod settings_table;
 mod timer_form;
@@ -71,6 +72,8 @@ pub struct MainState {
     layout_editor: Option<OpenWindow<layout_editor::State>>,
     window_settings_editor: Option<OpenWindow<window_settings_editor::State>>,
     hotkeys_editor: Option<OpenWindow<hotkeys_editor::State>>,
+    notes_editor: Option<OpenWindow<notes_editor::State>>,
+    notes_viewer: Option<OpenWindow<notes_editor::ViewerState>>,
     #[cfg(feature = "auto-splitting")]
     autosplitter_editor: Option<OpenWindow<autosplitter_editor::State>>,
     image_cache: Rc<RefCell<ImageCache>>,
@@ -134,6 +137,8 @@ impl MainState {
             layout_editor: None,
             window_settings_editor: None,
             hotkeys_editor: None,
+            notes_editor: None,
+            notes_viewer: None,
             #[cfg(feature = "auto-splitting")]
             autosplitter_editor: None,
             image_cache: Rc::new(RefCell::new(ImageCache::new())),
@@ -203,6 +208,38 @@ impl Lens<MainState, hotkeys_editor::State> for HotkeysEditorLens {
         f: F,
     ) -> V {
         f(&mut data.hotkeys_editor.as_mut().unwrap().state)
+    }
+}
+
+struct NotesEditorLens;
+
+impl Lens<MainState, notes_editor::State> for NotesEditorLens {
+    fn with<V, F: FnOnce(&notes_editor::State) -> V>(&self, data: &MainState, f: F) -> V {
+        f(&data.notes_editor.as_ref().unwrap().state)
+    }
+
+    fn with_mut<V, F: FnOnce(&mut notes_editor::State) -> V>(
+        &self,
+        data: &mut MainState,
+        f: F,
+    ) -> V {
+        f(&mut data.notes_editor.as_mut().unwrap().state)
+    }
+}
+
+struct NotesViewerLens;
+
+impl Lens<MainState, notes_editor::ViewerState> for NotesViewerLens {
+    fn with<V, F: FnOnce(&notes_editor::ViewerState) -> V>(&self, data: &MainState, f: F) -> V {
+        f(&data.notes_viewer.as_ref().unwrap().state)
+    }
+
+    fn with_mut<V, F: FnOnce(&mut notes_editor::ViewerState) -> V>(
+        &self,
+        data: &mut MainState,
+        f: F,
+    ) -> V {
+        f(&mut data.notes_viewer.as_mut().unwrap().state)
     }
 }
 

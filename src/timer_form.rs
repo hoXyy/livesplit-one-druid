@@ -25,10 +25,10 @@ use crate::{
         BACKGROUND, BUTTON_BORDER, BUTTON_BORDER_RADIUS, BUTTON_BOTTOM, BUTTON_TOP, PRIMARY_LIGHT,
         SELECTED_TEXT_BACKGROUND_COLOR, TEXTBOX_BACKGROUND,
     },
-    hotkeys_editor, layout_editor, run_editor, software_renderer,
+    hotkeys_editor, layout_editor, notes_editor, run_editor, software_renderer,
     window_settings_editor::{self, WindowSettings},
-    HotkeysEditorLens, LayoutEditorLens, MainState, OpenWindow, RunEditorLens,
-    WindowSettingsEditorLens, HOTKEY_SYSTEM,
+    HotkeysEditorLens, LayoutEditorLens, MainState, NotesEditorLens, NotesViewerLens, OpenWindow,
+    RunEditorLens, WindowSettingsEditorLens, HOTKEY_SYSTEM,
 };
 
 struct WithMenu<T> {
@@ -123,6 +123,8 @@ const CONTEXT_MENU_SET_TIMING_METHOD: Selector<TimingMethod> =
 const CONTEXT_MENU_EDIT_WINDOW_SETTINGS: Selector =
     Selector::new("context-menu-edit-window-settings");
 const CONTEXT_MENU_EDIT_HOTKEYS: Selector = Selector::new("context-menu-edit-hotkeys");
+const CONTEXT_MENU_EDIT_NOTES: Selector = Selector::new("context-menu-edit-notes");
+const CONTEXT_MENU_SHOW_NOTES: Selector = Selector::new("context-menu-show-notes");
 const WORLD_RECORD_RESPONSE: Selector<(usize, String, Option<String>)> =
     Selector::new("world-record-response");
 #[cfg(feature = "auto-splitting")]
@@ -133,6 +135,11 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut MainState, env: &Env) {
         match event {
             Event::AnimFrame(_) => {
+                if let Some(notes_viewer) = &mut data.notes_viewer {
+                    if let Some(index) = data.timer.read().unwrap().current_split_index() {
+                        notes_viewer.state.follow_split(index);
+                    }
+                }
                 if data.layout_editor.is_none() {
                     let requests = {
                         let timer = data.timer.read().unwrap();
@@ -407,6 +414,16 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
                                     .command(CONTEXT_MENU_EDIT_WINDOW_SETTINGS),
                             )
                             .entry(MenuItem::new("Hotkeys").command(CONTEXT_MENU_EDIT_HOTKEYS))
+                            .entry(
+                                MenuItem::new("Edit Split Notes")
+                                    .enabled(data.config.borrow().splits_path().is_some())
+                                    .command(CONTEXT_MENU_EDIT_NOTES),
+                            )
+                            .entry(
+                                MenuItem::new("Show Split Notes")
+                                    .enabled(data.config.borrow().splits_path().is_some())
+                                    .command(CONTEXT_MENU_SHOW_NOTES),
+                            )
                             .separator()
                             .entry(
                                 MenuItem::new("Exit").command(
@@ -566,6 +583,69 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
                         id: window_id,
                         state: window_settings_editor::State::new(window_settings),
                     });
+                } else if command.is(CONTEXT_MENU_EDIT_NOTES) {
+                    if data.notes_editor.is_none() {
+                        if let Some(splits_path) = data.config.borrow().splits_path() {
+                            let split_names = data
+                                .timer
+                                .read()
+                                .unwrap()
+                                .run()
+                                .segments()
+                                .iter()
+                                .map(|segment| segment.name().to_owned())
+                                .collect();
+                            let state = notes_editor::State::load(
+                                split_names,
+                                notes_editor::sidecar_path(splits_path),
+                            );
+                            let window =
+                                WindowDesc::new(notes_editor::root_widget().lens(NotesEditorLens))
+                                    .title("Split Notes")
+                                    .with_min_size((520.0, 400.0))
+                                    .window_size((680.0, 560.0))
+                                    .set_level(WindowLevel::AppWindow)
+                                    .set_always_on_top(true);
+                            let window_id = window.id;
+                            ctx.new_window(window);
+                            data.notes_editor = Some(OpenWindow {
+                                id: window_id,
+                                state,
+                            });
+                        }
+                    }
+                } else if command.is(CONTEXT_MENU_SHOW_NOTES) {
+                    if data.notes_viewer.is_none() {
+                        if let Some(splits_path) = data.config.borrow().splits_path() {
+                            let split_names = data
+                                .timer
+                                .read()
+                                .unwrap()
+                                .run()
+                                .segments()
+                                .iter()
+                                .map(|segment| segment.name().to_owned())
+                                .collect();
+                            let state = notes_editor::ViewerState::load(
+                                split_names,
+                                notes_editor::sidecar_path(splits_path),
+                            );
+                            let window = WindowDesc::new(
+                                notes_editor::viewer_widget().lens(NotesViewerLens),
+                            )
+                            .title("Split Notes")
+                            .with_min_size((280.0, 160.0))
+                            .window_size((420.0, 280.0))
+                            .set_level(WindowLevel::AppWindow)
+                            .set_always_on_top(true);
+                            let window_id = window.id;
+                            ctx.new_window(window);
+                            data.notes_viewer = Some(OpenWindow {
+                                id: window_id,
+                                state,
+                            });
+                        }
+                    }
                 } else if command.is(CONTEXT_MENU_EDIT_HOTKEYS) {
                     let _ = HOTKEY_SYSTEM
                         .write()
@@ -1093,6 +1173,20 @@ impl AppDelegate<MainState> for WindowManagement {
                 }
                 data.hotkeys_editor = None;
                 let _ = HOTKEY_SYSTEM.write().unwrap().as_mut().unwrap().activate();
+                return;
+            }
+        }
+
+        if let Some(window) = &data.notes_editor {
+            if id == window.id {
+                data.notes_editor = None;
+                return;
+            }
+        }
+
+        if let Some(window) = &data.notes_viewer {
+            if id == window.id {
+                data.notes_viewer = None;
                 return;
             }
         }
