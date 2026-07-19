@@ -1,18 +1,32 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    path::PathBuf,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use druid::{
     commands,
     lens::Identity,
+    piet::{ImageBuf, ImageFormat, InterpolationMode},
     theme,
     widget::{
-        Button, ClipBox, Container, CrossAxisAlignment, Flex, Label, List, ListIter, Painter,
-        Scroll, Switch, TextBox,
+        Button, ClipBox, Container, Controller, CrossAxisAlignment, Either, Flex, Label, List,
+        ListIter, Scroll, Switch, TextBox,
     },
     BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, LensExt, LifeCycle, LifeCycleCtx,
-    LinearGradient, Menu, MenuItem, PaintCtx, RenderContext, Selector, Size, TextAlignment,
+    LinearGradient, Menu, MenuItem, PaintCtx, RenderContext, Selector, Size, Target, TextAlignment,
     UnitPoint, UpdateCtx, Widget, WidgetExt,
 };
-use livesplit_core::{run::editor, settings::ImageCache, RunEditor, TimeSpan, TimingMethod};
+use livesplit_core::{
+    run::editor,
+    settings::{Image, ImageCache, ImageId},
+    RunEditor, TimeSpan, TimingMethod,
+};
 
 use crate::{
     config::Config,
@@ -23,8 +37,77 @@ use crate::{
         TIME_COLUMN_WIDTH,
     },
     formatter_scope::{formatted, optional_time_span, validated, OnFocusLoss},
-    MainState,
+    speedrun_com, MainState,
 };
+
+const GAME_RESULTS: Selector<(u64, String, Arc<[ApiGame]>, Option<String>)> =
+    Selector::new("run-editor-src-game-results");
+const GAME_DETAILS: Selector<(u64, String, Arc<ApiDetails>, Option<String>)> =
+    Selector::new("run-editor-src-game-details");
+const VARIABLE_RESULTS: Selector<(u64, String, Arc<[ApiVariable]>, Option<String>)> =
+    Selector::new("run-editor-src-variable-results");
+const SET_PLATFORM: Selector<String> = Selector::new("run-editor-src-set-platform");
+const SET_REGION: Selector<String> = Selector::new("run-editor-src-set-region");
+const SET_VARIABLE: Selector<(String, String)> = Selector::new("run-editor-src-set-variable");
+const SELECT_GAME: Selector<usize> = Selector::new("run-editor-src-select-game");
+const SELECT_CATEGORY: Selector<usize> = Selector::new("run-editor-src-select-category");
+const REQUEST_SEGMENT_ICON: Selector<usize> = Selector::new("run-editor-request-segment-icon");
+const SEGMENT_ICON_RESULT: Selector<(usize, PathBuf)> =
+    Selector::new("run-editor-segment-icon-result");
+const REMOVE_SEGMENT_ICON: Selector<usize> = Selector::new("run-editor-remove-segment-icon");
+const REQUEST_GAME_ICON: Selector = Selector::new("run-editor-request-game-icon");
+const GAME_ICON_RESULT: Selector<PathBuf> = Selector::new("run-editor-game-icon-result");
+const REMOVE_GAME_ICON: Selector = Selector::new("run-editor-remove-game-icon");
+static REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn next_request_generation() -> u64 {
+    REQUEST_GENERATION.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+#[derive(Clone, Data)]
+struct ApiGame {
+    id: String,
+    name: String,
+}
+
+#[derive(Clone, Data)]
+struct ApiCategory {
+    id: String,
+    name: String,
+    rules: String,
+}
+
+#[derive(Clone, Data)]
+struct ApiVariable {
+    name: String,
+    values: Arc<[String]>,
+    default: Option<String>,
+    user_defined: bool,
+    mandatory: bool,
+    is_subcategory: bool,
+}
+
+#[derive(Clone, Data, Default)]
+struct ApiDetails {
+    categories: Arc<[ApiCategory]>,
+    platforms: Arc<[String]>,
+    regions: Arc<[String]>,
+}
+
+#[derive(Clone, Data, Default)]
+struct ApiState {
+    game_results: Arc<[ApiGame]>,
+    details: Arc<ApiDetails>,
+    variables: Arc<[ApiVariable]>,
+    selected_game_id: String,
+    selected_category_id: String,
+    request_generation: u64,
+    loading: bool,
+    message: String,
+    initial_lookup_started: bool,
+    auto_select_game: bool,
+    auto_select_category: bool,
+}
 
 struct SegmentWidget<T> {
     inner: T,
@@ -124,6 +207,8 @@ pub struct State {
     #[data(ignore)]
     pub closed_with_ok: bool,
     image_cache: Rc<RefCell<ImageCache>>,
+    api: ApiState,
+    additional_info_tab: bool,
 }
 
 impl State {
@@ -151,36 +236,296 @@ impl State {
             editor: Rc::new(RefCell::new(Some(editor))),
             closed_with_ok: false,
             image_cache,
+            api: ApiState::default(),
+            additional_info_tab: false,
+        }
+    }
+}
+
+fn refresh(state: &mut State) {
+    let mut editor = state.editor.borrow_mut();
+    state.state = Rc::new(editor.as_mut().unwrap().state(
+        &mut state.image_cache.borrow_mut(),
+        livesplit_core::Lang::English,
+    ));
+    state.image_cache.borrow_mut().collect();
+}
+
+fn request_game_search(ctx: &mut EventCtx, state: &mut State, auto_select: bool) {
+    let query = state.state.game.trim().to_owned();
+    let generation = next_request_generation();
+    state.api.request_generation = generation;
+    state.api.selected_game_id.clear();
+    state.api.selected_category_id.clear();
+    state.api.game_results = Arc::new([]);
+    state.api.details = Arc::new(ApiDetails::default());
+    state.api.variables = Arc::new([]);
+    state.api.auto_select_game = auto_select;
+    state.api.auto_select_category = false;
+    if query.len() < 2 {
+        state.api.loading = false;
+        state.api.message.clear();
+        return;
+    }
+    state.api.loading = true;
+    state.api.message = "Searching speedrun.com…".into();
+    let sink = ctx.get_external_handle();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(250));
+        if REQUEST_GENERATION.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        let result = speedrun_com::search_games(&query);
+        let (games, error): (Arc<[ApiGame]>, Option<String>) = match result {
+            Ok(games) => (
+                games
+                    .into_iter()
+                    .map(|game| ApiGame {
+                        id: game.id,
+                        name: game.name,
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                None,
+            ),
+            Err(error) => (Arc::new([]), Some(error.to_string())),
+        };
+        let _ = sink.submit_command(
+            GAME_RESULTS,
+            (generation, query, games, error),
+            Target::Auto,
+        );
+    });
+}
+
+fn select_game(ctx: &mut EventCtx, state: &mut State, index: usize) {
+    let Some(game) = state.api.game_results.get(index).cloned() else {
+        return;
+    };
+    state
+        .editor
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .set_game_name(game.name.clone());
+    refresh(state);
+    let generation = next_request_generation();
+    state.api.request_generation = generation;
+    state.api.selected_game_id = game.id.clone();
+    state.api.selected_category_id.clear();
+    state.api.game_results = Arc::new([]);
+    state.api.loading = true;
+    state.api.message = "Loading categories and platforms…".into();
+    let sink = ctx.get_external_handle();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let categories = speedrun_com::categories(&game.id)?
+                .into_iter()
+                .map(|category| ApiCategory {
+                    id: category.id,
+                    name: category.name,
+                    rules: category.rules,
+                })
+                .collect::<Vec<_>>();
+            let platforms = speedrun_com::platforms(&game.id)?
+                .into_iter()
+                .map(|choice| choice.name)
+                .collect::<Vec<_>>();
+            let regions = speedrun_com::regions(&game.id)?
+                .into_iter()
+                .map(|choice| choice.name)
+                .collect::<Vec<_>>();
+            Ok::<_, anyhow::Error>(ApiDetails {
+                categories: categories.into(),
+                platforms: platforms.into(),
+                regions: regions.into(),
+            })
+        })();
+        let (details, error) = match result {
+            Ok(details) => (Arc::new(details), None),
+            Err(error) => (Arc::new(ApiDetails::default()), Some(error.to_string())),
+        };
+        let _ = sink.submit_command(
+            GAME_DETAILS,
+            (generation, game.id, details, error),
+            Target::Auto,
+        );
+    });
+}
+
+fn select_category(ctx: &mut EventCtx, state: &mut State, index: usize) {
+    let Some(category) = state.api.details.categories.get(index).cloned() else {
+        return;
+    };
+    state
+        .editor
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .set_category_name(category.name.clone());
+    refresh(state);
+    let generation = next_request_generation();
+    state.api.request_generation = generation;
+    state.api.selected_category_id = category.id.clone();
+    state.api.variables = Arc::new([]);
+    state.api.loading = true;
+    state.api.message = "Loading category options…".into();
+    let sink = ctx.get_external_handle();
+    std::thread::spawn(move || {
+        let result = speedrun_com::variables(&category.id);
+        let (variables, error): (Arc<[ApiVariable]>, Option<String>) = match result {
+            Ok(variables) => (
+                variables
+                    .into_iter()
+                    .map(|variable| ApiVariable {
+                        name: variable.name,
+                        values: variable.values.into(),
+                        default: variable.default,
+                        user_defined: variable.user_defined,
+                        mandatory: variable.mandatory,
+                        is_subcategory: variable.is_subcategory,
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                None,
+            ),
+            Err(error) => (Arc::new([]), Some(error.to_string())),
+        };
+        let _ = sink.submit_command(
+            VARIABLE_RESULTS,
+            (generation, category.id, variables, error),
+            Target::Auto,
+        );
+    });
+}
+
+struct GameIcon {
+    id: Option<ImageId>,
+    image: Option<ImageBuf>,
+}
+
+impl GameIcon {
+    fn new() -> Self {
+        Self {
+            id: None,
+            image: None,
+        }
+    }
+
+    fn update_image(&mut self, data: &State) {
+        let id = data.state.icon;
+        if self.id == Some(id) {
+            return;
+        }
+        self.id = Some(id);
+        self.image = if id.is_empty() {
+            None
+        } else {
+            data.image_cache
+                .borrow()
+                .lookup(&id)
+                .and_then(|image| image::load_from_memory(image.data()).ok())
+                .map(|image| image.into_rgba8())
+                .map(|image| {
+                    let (width, height) = image.dimensions();
+                    ImageBuf::from_raw(
+                        image.into_raw(),
+                        ImageFormat::RgbaSeparate,
+                        width as usize,
+                        height as usize,
+                    )
+                })
+        };
+    }
+}
+
+impl Widget<State> for GameIcon {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut State, _env: &Env) {
+        if let Event::MouseDown(mouse) = event {
+            if mouse.button == druid::MouseButton::Left && mouse.count == 2 {
+                ctx.submit_command(REQUEST_GAME_ICON);
+                ctx.set_handled();
+            } else if mouse.button == druid::MouseButton::Right {
+                let has_icon = !data.state.icon.is_empty();
+                let mut menu = Menu::new("Game Icon").entry(
+                    MenuItem::new(if has_icon {
+                        "Replace Icon…"
+                    } else {
+                        "Set Icon…"
+                    })
+                    .command(REQUEST_GAME_ICON),
+                );
+                if has_icon {
+                    menu = menu.entry(MenuItem::new("Remove Icon").command(REMOVE_GAME_ICON));
+                }
+                ctx.show_context_menu::<MainState>(menu, mouse.window_pos);
+                ctx.set_handled();
+            }
+        }
+    }
+
+    fn lifecycle(
+        &mut self,
+        _ctx: &mut LifeCycleCtx,
+        _event: &LifeCycle,
+        _data: &State,
+        _env: &Env,
+    ) {
+    }
+
+    fn update(&mut self, ctx: &mut UpdateCtx, old: &State, data: &State, _env: &Env) {
+        if old.state.icon != data.state.icon {
+            self.id = None;
+            ctx.request_paint();
+        }
+    }
+
+    fn layout(
+        &mut self,
+        _ctx: &mut LayoutCtx,
+        bc: &BoxConstraints,
+        _data: &State,
+        _env: &Env,
+    ) -> Size {
+        bc.constrain(Size::new(ICON_SIZE, ICON_SIZE))
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &State, env: &Env) {
+        self.update_image(data);
+        let rect = ctx.size().to_rect();
+        let bounds = rect.inset(-BUTTON_SPACING);
+        ctx.stroke(rect, &BUTTON_BORDER, 1.0);
+        if let Some(image) = &self.image {
+            let piet_image = image.to_image(ctx.render_ctx);
+            let image_size = image.size();
+            let scale = (bounds.width() / image_size.width)
+                .min(bounds.height() / image_size.height)
+                .min(1.0);
+            let size = image_size * scale;
+            let target = size.to_rect().with_origin(druid::Point::new(
+                0.5 * (ctx.size().width - size.width),
+                0.5 * (ctx.size().height - size.height),
+            ));
+            ctx.draw_image(&piet_image, target, InterpolationMode::Bilinear);
+        } else {
+            let center = ctx.size().to_rect().center();
+            let color = env.get(theme::PLACEHOLDER_COLOR);
+            ctx.stroke(
+                druid::kurbo::Line::new((center.x - 8.0, center.y), (center.x + 8.0, center.y)),
+                &color,
+                1.0,
+            );
+            ctx.stroke(
+                druid::kurbo::Line::new((center.x, center.y - 8.0), (center.x, center.y + 8.0)),
+                &color,
+                1.0,
+            );
         }
     }
 }
 
 fn game_icon() -> impl Widget<State> {
-    Container::new(Flex::row())
-        // .background(Color::grey8(0x16))
-        .background(Painter::new(|_ctx, _state: &State, _| {
-            // let matrix = FillStrat::Contain.affine_to_fill(ctx.size(), state.image.size());
-            // ctx.with_save(|ctx| {
-            //     ctx.transform(matrix);
-            //     let image = state.image.to_image(ctx.render_ctx);
-            //     ctx.draw_image(
-            //         &image,
-            //         state.image.size().to_rect(),
-            //         InterpolationMode::Bilinear,
-            //     );
-            // })
-        }))
-        .padding(BUTTON_SPACING)
-        .border(BUTTON_BORDER, 1.0)
-        .on_click(|_ctx, _, _| {
-            // TODO:
-            // let menu = MenuDesc::new(LocalizedString::new("foo"))
-            //     .append(druid::platform_menus::win::file::open())
-            //     .append_separator()
-            //     .append(druid::platform_menus::win::file::exit());
-            // ctx.show_context_menu::<State>(ContextMenu::new(menu, Point::ZERO));
-        })
-        .fix_size(ICON_SIZE, ICON_SIZE)
+    GameIcon::new().fix_size(ICON_SIZE, ICON_SIZE)
 }
 
 fn game_name() -> impl Widget<State> {
@@ -203,8 +548,27 @@ fn game_name() -> impl Widget<State> {
                         state.image_cache.borrow_mut().collect();
                     },
                 ))
+                .controller(GameSearchController)
                 .expand_width(),
         )
+}
+
+struct GameSearchController;
+
+impl<W: Widget<State>> Controller<State, W> for GameSearchController {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut State,
+        env: &Env,
+    ) {
+        child.event(ctx, event, data, env);
+        if matches!(event, Event::KeyUp(_)) {
+            request_game_search(ctx, data, false);
+        }
+    }
 }
 
 fn category_name() -> impl Widget<State> {
@@ -304,6 +668,73 @@ fn header() -> impl Widget<State> {
                 .with_spacer(SPACING)
                 .with_child(attempts().fix_width(ATTEMPTS_OFFSET_WIDTH)),
         )
+        .with_child(game_suggestions())
+        .with_child(category_suggestions())
+}
+
+fn game_suggestions() -> impl Widget<State> {
+    Either::new(
+        |state: &State, _| !state.api.game_results.is_empty(),
+        Button::new(|state: &State, _env: &Env| {
+            format!(
+                "Select matching game… ({} found)",
+                state.api.game_results.len()
+            )
+        })
+        .on_click(|ctx, state: &mut State, _| {
+            let mut menu = Menu::new("Matching Games");
+            for (index, game) in state.api.game_results.iter().enumerate() {
+                menu = menu.entry(
+                    MenuItem::new(game.name.clone()).command(druid::Command::new(
+                        SELECT_GAME,
+                        index,
+                        Target::Auto,
+                    )),
+                );
+            }
+            ctx.show_context_menu::<MainState>(
+                menu,
+                ctx.to_window(druid::Point::new(0.0, ctx.size().height)),
+            );
+        })
+        .expand_width()
+        .padding((0.0, BUTTON_SPACING, 0.0, 0.0)),
+        Container::new(Label::new("")),
+    )
+}
+
+fn category_suggestions() -> impl Widget<State> {
+    Either::new(
+        |state: &State, _| {
+            !state.api.details.categories.is_empty() && state.api.selected_category_id.is_empty()
+        },
+        Flex::column()
+            .cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(Label::new("Category on speedrun.com"))
+            .with_child(
+                Button::new(|state: &State, _env: &Env| {
+                    format!(
+                        "Select leaderboard category… ({} found)",
+                        state.api.details.categories.len()
+                    )
+                })
+                .on_click(|ctx, state: &mut State, _| {
+                    let mut menu = Menu::new("Categories");
+                    for (index, category) in state.api.details.categories.iter().enumerate() {
+                        menu =
+                            menu.entry(MenuItem::new(category.name.clone()).command(
+                                druid::Command::new(SELECT_CATEGORY, index, Target::Auto),
+                            ));
+                    }
+                    ctx.show_context_menu::<MainState>(
+                        menu,
+                        ctx.to_window(druid::Point::new(0.0, ctx.size().height)),
+                    );
+                })
+                .expand_width(),
+            ),
+        Container::new(Label::new("")),
+    )
 }
 
 fn side_buttons() -> impl Widget<State> {
@@ -400,6 +831,7 @@ impl ListIter<Segment> for State {
         let mut segment = Segment {
             index: 0,
             state: self.state.clone(),
+            image_cache: self.image_cache.clone(),
             new_name: None,
             new_split_time: None,
             new_segment_time: None,
@@ -419,6 +851,7 @@ impl ListIter<Segment> for State {
         let mut segment = Segment {
             index: 0,
             state: self.state.clone(),
+            image_cache: self.image_cache.clone(),
             new_name: None,
             new_split_time: None,
             new_segment_time: None,
@@ -502,6 +935,8 @@ impl ListIter<Segment> for State {
 struct Segment {
     index: usize,
     state: Rc<editor::State>,
+    #[data(ignore)]
+    image_cache: Rc<RefCell<ImageCache>>,
     new_name: Option<String>,
     new_split_time: Option<String>,
     new_segment_time: Option<String>,
@@ -512,11 +947,143 @@ struct Segment {
     unselect: bool,
 }
 
+struct SegmentIcon {
+    id: Option<ImageId>,
+    image: Option<ImageBuf>,
+}
+
+impl SegmentIcon {
+    fn new() -> Self {
+        Self {
+            id: None,
+            image: None,
+        }
+    }
+
+    fn update_image(&mut self, data: &Segment) {
+        let id = data.state.segments[data.index].icon;
+        if self.id == Some(id) {
+            return;
+        }
+        self.id = Some(id);
+        self.image = if id.is_empty() {
+            None
+        } else {
+            data.image_cache
+                .borrow()
+                .lookup(&id)
+                .and_then(|image| image::load_from_memory(image.data()).ok())
+                .map(|image| image.into_rgba8())
+                .map(|image| {
+                    let (width, height) = image.dimensions();
+                    ImageBuf::from_raw(
+                        image.into_raw(),
+                        ImageFormat::RgbaSeparate,
+                        width as usize,
+                        height as usize,
+                    )
+                })
+        };
+    }
+}
+
+impl Widget<Segment> for SegmentIcon {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut Segment, _env: &Env) {
+        if let Event::MouseDown(mouse) = event {
+            if mouse.button == druid::MouseButton::Left && mouse.count == 2 {
+                ctx.submit_command(REQUEST_SEGMENT_ICON.with(data.index));
+                ctx.set_handled();
+            } else if mouse.button == druid::MouseButton::Right {
+                let has_icon = !data.state.segments[data.index].icon.is_empty();
+                let mut menu = Menu::new("Segment Icon").entry(
+                    MenuItem::new(if has_icon {
+                        "Replace Icon…"
+                    } else {
+                        "Set Icon…"
+                    })
+                    .command(REQUEST_SEGMENT_ICON.with(data.index)),
+                );
+                if has_icon {
+                    menu = menu.entry(
+                        MenuItem::new("Remove Icon").command(REMOVE_SEGMENT_ICON.with(data.index)),
+                    );
+                }
+                ctx.show_context_menu::<MainState>(menu, mouse.window_pos);
+                ctx.set_handled();
+            }
+        }
+    }
+
+    fn lifecycle(
+        &mut self,
+        _ctx: &mut LifeCycleCtx,
+        _event: &LifeCycle,
+        _data: &Segment,
+        _env: &Env,
+    ) {
+    }
+
+    fn update(&mut self, ctx: &mut UpdateCtx, old: &Segment, data: &Segment, _env: &Env) {
+        if old.state.segments[old.index].icon != data.state.segments[data.index].icon {
+            self.id = None;
+            ctx.request_paint();
+        }
+    }
+
+    fn layout(
+        &mut self,
+        _ctx: &mut LayoutCtx,
+        bc: &BoxConstraints,
+        _data: &Segment,
+        _env: &Env,
+    ) -> Size {
+        bc.constrain(Size::new(50.0, 25.0))
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &Segment, env: &Env) {
+        self.update_image(data);
+        let bounds = ctx.size().to_rect().inset(-3.0);
+        if let Some(image) = &self.image {
+            let piet_image = image.to_image(ctx.render_ctx);
+            let image_size = image.size();
+            let scale = (bounds.width() / image_size.width)
+                .min(bounds.height() / image_size.height)
+                .min(1.0);
+            let size = image_size * scale;
+            let target = size.to_rect().with_origin(druid::Point::new(
+                0.5 * (ctx.size().width - size.width),
+                0.5 * (ctx.size().height - size.height),
+            ));
+            ctx.draw_image(&piet_image, target, InterpolationMode::Bilinear);
+        } else {
+            let center = ctx.size().to_rect().center();
+            let color = env.get(theme::PLACEHOLDER_COLOR);
+            ctx.stroke(
+                druid::kurbo::Line::new((center.x - 4.0, center.y), (center.x + 4.0, center.y)),
+                &color,
+                1.0,
+            );
+            ctx.stroke(
+                druid::kurbo::Line::new((center.x, center.y - 4.0), (center.x, center.y + 4.0)),
+                &color,
+                1.0,
+            );
+        }
+    }
+}
+
 fn segments() -> impl Widget<State> {
     Flex::column()
         .with_child(
             Flex::row()
                 .with_spacer(TABLE_HORIZONTAL_MARGIN)
+                .with_child(
+                    Label::new("Icon")
+                        .with_font(COLUMN_LABEL_FONT)
+                        .center()
+                        .fix_width(50.0),
+                )
+                .with_spacer(GRID_BORDER)
                 .with_flex_child(
                     ClipBox::unmanaged(Label::new("Segment Name").with_font(COLUMN_LABEL_FONT))
                         .expand_width(),
@@ -551,6 +1118,8 @@ fn segments() -> impl Widget<State> {
                     SegmentWidget::new(
                         Flex::row()
                             .with_spacer(TABLE_HORIZONTAL_MARGIN)
+                            .with_child(SegmentIcon::new().fix_width(50.0))
+                            .with_spacer(GRID_BORDER)
                             .with_flex_child(
                                 TextBox::new()
                                     .lens(Identity.map(
@@ -690,6 +1259,219 @@ fn body() -> impl Widget<State> {
         .with_flex_child(tabs(), 1.0)
 }
 
+fn metadata_text_field(
+    label: &'static str,
+    getter: fn(&State) -> String,
+    setter: fn(&mut RunEditor, String),
+) -> impl Widget<State> {
+    Flex::column()
+        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(Label::new(label))
+        .with_spacer(BUTTON_SPACING)
+        .with_child(
+            TextBox::new()
+                .lens(Identity.map(getter, move |state: &mut State, value| {
+                    setter(state.editor.borrow_mut().as_mut().unwrap(), value);
+                    refresh(state);
+                }))
+                .expand_width(),
+        )
+}
+
+fn platform_field() -> impl Widget<State> {
+    Flex::row()
+        .cross_axis_alignment(CrossAxisAlignment::End)
+        .with_flex_child(
+            metadata_text_field(
+                "Platform",
+                |state| state.state.metadata.platform_name.clone(),
+                |editor, value| editor.set_platform_name(value),
+            ),
+            1.0,
+        )
+        .with_spacer(BUTTON_SPACING)
+        .with_child(
+            Button::new("Choose…").on_click(|ctx, state: &mut State, _| {
+                let mut menu = Menu::new("Platform");
+                for platform in state.api.details.platforms.iter() {
+                    menu = menu.entry(MenuItem::new(platform.clone()).command(
+                        druid::Command::new(SET_PLATFORM, platform.clone(), Target::Auto),
+                    ));
+                }
+                ctx.show_context_menu::<MainState>(
+                    menu,
+                    ctx.to_window(druid::Point::new(0.0, ctx.size().height)),
+                );
+            }),
+        )
+}
+
+fn region_field() -> impl Widget<State> {
+    Flex::row()
+        .cross_axis_alignment(CrossAxisAlignment::End)
+        .with_flex_child(
+            metadata_text_field(
+                "Region",
+                |state| state.state.metadata.region_name.clone(),
+                |editor, value| editor.set_region_name(value),
+            ),
+            1.0,
+        )
+        .with_spacer(BUTTON_SPACING)
+        .with_child(
+            Button::new("Choose…").on_click(|ctx, state: &mut State, _| {
+                let mut menu = Menu::new("Region");
+                for region in state.api.details.regions.iter() {
+                    menu = menu.entry(MenuItem::new(region.clone()).command(druid::Command::new(
+                        SET_REGION,
+                        region.clone(),
+                        Target::Auto,
+                    )));
+                }
+                ctx.show_context_menu::<MainState>(
+                    menu,
+                    ctx.to_window(druid::Point::new(0.0, ctx.size().height)),
+                );
+            }),
+        )
+}
+
+fn variable_row(index: usize) -> impl Widget<State> {
+    Either::new(
+        move |state: &State, _| state.api.variables.get(index).is_some(),
+        Flex::row()
+            .with_child(
+                Label::new(move |state: &State, _env: &Env| {
+                    state
+                        .api
+                        .variables
+                        .get(index)
+                        .map(|variable| {
+                            let suffix = if variable.is_subcategory {
+                                " (subcategory)"
+                            } else if variable.mandatory {
+                                " (required)"
+                            } else {
+                                ""
+                            };
+                            format!("{}{}", variable.name, suffix)
+                        })
+                        .unwrap_or_default()
+                })
+                .fix_width(190.0),
+            )
+            .with_flex_child(
+                TextBox::new()
+                    .lens(Identity.map(
+                        move |state: &State| {
+                            let Some(variable) = state.api.variables.get(index) else {
+                                return String::new();
+                            };
+                            state
+                                .state
+                                .metadata
+                                .speedrun_com_variables()
+                                .find(|(name, _)| *name == variable.name.as_str())
+                                .map(|(_, value)| value.clone())
+                                .or_else(|| variable.default.clone())
+                                .unwrap_or_default()
+                        },
+                        move |state: &mut State, value| {
+                            let Some(variable) = state.api.variables.get(index) else {
+                                return;
+                            };
+                            let name = variable.name.clone();
+                            state
+                                .editor
+                                .borrow_mut()
+                                .as_mut()
+                                .unwrap()
+                                .set_speedrun_com_variable(name, value);
+                            refresh(state);
+                        },
+                    ))
+                    .expand_width(),
+                1.0,
+            )
+            .with_spacer(BUTTON_SPACING)
+            .with_child(
+                Button::new("Choose…").on_click(move |ctx, state: &mut State, _| {
+                    let Some(variable) = state.api.variables.get(index) else {
+                        return;
+                    };
+                    let mut menu = Menu::new(variable.name.clone());
+                    for value in variable.values.iter() {
+                        menu =
+                            menu.entry(MenuItem::new(value.clone()).command(druid::Command::new(
+                                SET_VARIABLE,
+                                (variable.name.clone(), value.clone()),
+                                Target::Auto,
+                            )));
+                    }
+                    ctx.show_context_menu::<MainState>(
+                        menu,
+                        ctx.to_window(druid::Point::new(0.0, ctx.size().height)),
+                    );
+                }),
+            ),
+        Container::new(Label::new("")),
+    )
+}
+
+fn additional_info() -> impl Widget<State> {
+    let mut variables = Flex::column();
+    for index in 0..16 {
+        variables.add_child(variable_row(index));
+        variables.add_spacer(BUTTON_SPACING);
+    }
+
+    Flex::column()
+        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(Label::new("Additional Info").with_text_size(15.0))
+        .with_spacer(BUTTON_SPACING)
+        .with_child(
+            Flex::row()
+                .with_flex_child(platform_field(), 1.0)
+                .with_spacer(SPACING)
+                .with_flex_child(region_field(), 1.0)
+                .with_spacer(SPACING)
+                .with_child(
+                    Flex::column()
+                        .cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_child(Label::new("Emulator"))
+                        .with_spacer(BUTTON_SPACING)
+                        .with_child(
+                            Switch::new()
+                                .lens(Identity.map(
+                                    |state: &State| state.state.metadata.uses_emulator,
+                                    |state: &mut State, value| {
+                                        state
+                                            .editor
+                                            .borrow_mut()
+                                            .as_mut()
+                                            .unwrap()
+                                            .set_emulator_usage(value);
+                                        refresh(state);
+                                    },
+                                ))
+                                .env_scope(|env, _| switch_style(env)),
+                        ),
+                ),
+        )
+        .with_spacer(BUTTON_SPACING)
+        .with_child(
+            Scroll::new(variables)
+                .vertical()
+                .fix_height(140.0)
+                .expand_width(),
+        )
+        .with_child(Label::new(|state: &State, _env: &Env| {
+            state.api.message.clone()
+        }))
+        .padding(BUTTON_SPACING)
+        .border(BUTTON_BORDER, 1.0)
+}
+
 fn run_editor() -> impl Widget<State> {
     Flex::column()
         .with_child(
@@ -699,7 +1481,255 @@ fn run_editor() -> impl Widget<State> {
                 .with_flex_child(header(), 1.0),
         )
         .with_spacer(SPACING)
-        .with_flex_child(body(), 1.0)
+        .with_child(
+            Flex::row()
+                .with_child(
+                    Button::new("Splits")
+                        .on_click(|_, state: &mut State, _| state.additional_info_tab = false)
+                        .env_scope(|env, state| {
+                            if !state.additional_info_tab {
+                                env.set(theme::BUTTON_LIGHT, BUTTON_ACTIVE_TOP);
+                                env.set(theme::BUTTON_DARK, BUTTON_ACTIVE_BOTTOM);
+                            }
+                        }),
+                )
+                .with_child(
+                    Button::new("Additional Info")
+                        .on_click(|_, state: &mut State, _| state.additional_info_tab = true)
+                        .env_scope(|env, state| {
+                            if state.additional_info_tab {
+                                env.set(theme::BUTTON_LIGHT, BUTTON_ACTIVE_TOP);
+                                env.set(theme::BUTTON_DARK, BUTTON_ACTIVE_BOTTOM);
+                            }
+                        }),
+                )
+                .env_scope(|env, _| env.set(theme::BUTTON_BORDER_RADIUS, 0.0)),
+        )
+        .with_flex_child(
+            Either::new(
+                |state: &State, _| state.additional_info_tab,
+                additional_info().expand(),
+                body().expand(),
+            ),
+            1.0,
+        )
+}
+
+struct SpeedrunComController;
+
+impl<W: Widget<State>> Controller<State, W> for SpeedrunComController {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut State,
+        env: &Env,
+    ) {
+        if matches!(event, Event::WindowConnected) && !data.api.initial_lookup_started {
+            data.api.initial_lookup_started = true;
+            if data.state.game.trim().len() >= 2 {
+                request_game_search(ctx, data, true);
+            }
+        }
+        if let Event::Command(command) = event {
+            if command.is(REQUEST_GAME_ICON) {
+                let sink = ctx.get_external_handle();
+                std::thread::spawn(move || {
+                    let dialog = native_dialog::DialogBuilder::file();
+                    #[cfg(not(target_os = "macos"))]
+                    let dialog = dialog
+                        .add_filter(
+                            "Images",
+                            &["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico"],
+                        )
+                        .add_filter("All Files", &["*"]);
+                    if let Ok(Some(path)) = dialog.open_single_file().show() {
+                        let _ = sink.submit_command(GAME_ICON_RESULT, path, Target::Auto);
+                    }
+                });
+                ctx.set_handled();
+                return;
+            }
+            if let Some(path) = command.get(GAME_ICON_RESULT) {
+                let mut bytes = Vec::new();
+                if let Ok(image) = Image::from_file(path, &mut bytes, Image::ICON) {
+                    {
+                        data.editor
+                            .borrow_mut()
+                            .as_mut()
+                            .unwrap()
+                            .set_game_icon(image);
+                    }
+                    refresh(data);
+                }
+                ctx.set_handled();
+                return;
+            }
+            if command.is(REMOVE_GAME_ICON) {
+                {
+                    data.editor
+                        .borrow_mut()
+                        .as_mut()
+                        .unwrap()
+                        .remove_game_icon();
+                }
+                refresh(data);
+                ctx.set_handled();
+                return;
+            }
+            if let Some(index) = command.get(REQUEST_SEGMENT_ICON) {
+                let index = *index;
+                let sink = ctx.get_external_handle();
+                std::thread::spawn(move || {
+                    let dialog = native_dialog::DialogBuilder::file();
+                    #[cfg(not(target_os = "macos"))]
+                    let dialog = dialog
+                        .add_filter(
+                            "Images",
+                            &["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico"],
+                        )
+                        .add_filter("All Files", &["*"]);
+                    if let Ok(Some(path)) = dialog.open_single_file().show() {
+                        let _ =
+                            sink.submit_command(SEGMENT_ICON_RESULT, (index, path), Target::Auto);
+                    }
+                });
+                ctx.set_handled();
+                return;
+            }
+            if let Some((index, path)) = command.get(SEGMENT_ICON_RESULT) {
+                if *index < data.state.segments.len() {
+                    let mut bytes = Vec::new();
+                    if let Ok(image) = Image::from_file(path, &mut bytes, Image::ICON) {
+                        {
+                            let mut editor = data.editor.borrow_mut();
+                            let editor = editor.as_mut().unwrap();
+                            editor.select_only(*index);
+                            editor.active_segment().set_icon(image);
+                        }
+                        refresh(data);
+                    }
+                }
+                ctx.set_handled();
+                return;
+            }
+            if let Some(index) = command.get(REMOVE_SEGMENT_ICON) {
+                if *index < data.state.segments.len() {
+                    {
+                        let mut editor = data.editor.borrow_mut();
+                        let editor = editor.as_mut().unwrap();
+                        editor.select_only(*index);
+                        editor.active_segment().remove_icon();
+                    }
+                    refresh(data);
+                }
+                ctx.set_handled();
+                return;
+            }
+            if let Some(index) = command.get(SELECT_GAME) {
+                select_game(ctx, data, *index);
+                return;
+            }
+            if let Some(index) = command.get(SELECT_CATEGORY) {
+                select_category(ctx, data, *index);
+                return;
+            }
+            if let Some((generation, query, games, error)) = command.get(GAME_RESULTS) {
+                if *generation == data.api.request_generation && *query == data.state.game {
+                    data.api.game_results = games.clone();
+                    data.api.loading = false;
+                    data.api.message = error
+                        .as_ref()
+                        .map(|error| format!("speedrun.com: {error}"))
+                        .unwrap_or_else(|| {
+                            if games.is_empty() {
+                                "No speedrun.com games found.".into()
+                            } else {
+                                "Select a matching game.".into()
+                            }
+                        });
+                    if data.api.auto_select_game {
+                        data.api.auto_select_game = false;
+                        if let Some(index) = games
+                            .iter()
+                            .position(|game| game.name.eq_ignore_ascii_case(query))
+                        {
+                            select_game(ctx, data, index);
+                            data.api.auto_select_category = true;
+                        }
+                    }
+                }
+                return;
+            }
+            if let Some((generation, game_id, details, error)) = command.get(GAME_DETAILS) {
+                if *generation == data.api.request_generation
+                    && *game_id == data.api.selected_game_id
+                {
+                    data.api.details = details.clone();
+                    data.api.loading = false;
+                    data.api.message = error
+                        .as_ref()
+                        .map(|error| format!("speedrun.com: {error}"))
+                        .unwrap_or_else(|| "Select a leaderboard category.".into());
+                    if data.api.auto_select_category {
+                        data.api.auto_select_category = false;
+                        let category_name = data.state.category.clone();
+                        if let Some(index) = details
+                            .categories
+                            .iter()
+                            .position(|category| category.name.eq_ignore_ascii_case(&category_name))
+                        {
+                            select_category(ctx, data, index);
+                        }
+                    }
+                }
+                return;
+            }
+            if let Some((generation, category_id, variables, error)) = command.get(VARIABLE_RESULTS)
+            {
+                if *generation == data.api.request_generation
+                    && *category_id == data.api.selected_category_id
+                {
+                    data.api.variables = variables.clone();
+                    data.api.loading = false;
+                    data.api.message = error
+                        .as_ref()
+                        .map(|error| format!("speedrun.com: {error}"))
+                        .unwrap_or_else(|| "Leaderboard metadata loaded.".into());
+                }
+                return;
+            }
+            if let Some(platform) = command.get(SET_PLATFORM) {
+                data.editor
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .set_platform_name(platform.clone());
+                refresh(data);
+                return;
+            }
+            if let Some(region) = command.get(SET_REGION) {
+                data.editor
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .set_region_name(region.clone());
+                refresh(data);
+                return;
+            }
+            if let Some((name, value)) = command.get(SET_VARIABLE) {
+                data.editor
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .set_speedrun_com_variable(name.clone(), value.clone());
+                refresh(data);
+                return;
+            }
+        }
+        child.event(ctx, event, data, env);
+    }
 }
 
 struct RunEditorWidget<T> {
@@ -843,6 +1873,7 @@ pub fn root_widget() -> impl Widget<State> {
                 ),
         )
         .padding(MARGIN)
+        .controller(SpeedrunComController)
 }
 
 struct OtherButtonWidget<T> {

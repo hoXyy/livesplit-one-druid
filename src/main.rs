@@ -32,6 +32,7 @@ mod map_scope;
 mod notes_editor;
 mod run_editor;
 mod settings_table;
+mod speedrun_com;
 mod timer_form;
 mod window_settings_editor;
 

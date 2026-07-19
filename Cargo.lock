@@ -2423,6 +2423,7 @@ dependencies = [
  "native-dialog",
  "once_cell",
  "serde",
+ "serde_json",
  "serde_yaml",
  "ureq",
 ]

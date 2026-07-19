@@ -451,8 +451,8 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
                     let editor = RunEditor::new(run).unwrap();
                     let window = WindowDesc::new(run_editor::root_widget().lens(RunEditorLens))
                         .title("Splits Editor")
-                        .with_min_size((690.0, 495.0))
-                        .window_size((690.0, 495.0))
+                        .with_min_size((760.0, 650.0))
+                        .window_size((820.0, 720.0))
                         // TODO: WindowLevel::Modal(ctx.window().clone())
                         .set_level(WindowLevel::AppWindow)
                         .set_always_on_top(true);
