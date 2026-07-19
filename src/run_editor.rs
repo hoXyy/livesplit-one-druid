@@ -1680,6 +1680,16 @@ fn platform_field() -> impl Widget<State> {
             1.0,
         )
         .with_spacer(BUTTON_SPACING)
+        .with_child(Button::new("Clear").on_click(|_, state: &mut State, _| {
+            state
+                .editor
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .set_platform_name(String::new());
+            refresh(state);
+        }))
+        .with_spacer(BUTTON_SPACING)
         .with_child(
             Button::new("Choose…").on_click(|ctx, state: &mut State, _| {
                 let mut menu = Menu::new("Platform");
@@ -1707,6 +1717,16 @@ fn region_field() -> impl Widget<State> {
             ),
             1.0,
         )
+        .with_spacer(BUTTON_SPACING)
+        .with_child(Button::new("Clear").on_click(|_, state: &mut State, _| {
+            state
+                .editor
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .set_region_name(String::new());
+            refresh(state);
+        }))
         .with_spacer(BUTTON_SPACING)
         .with_child(
             Button::new("Choose…").on_click(|ctx, state: &mut State, _| {
@@ -1763,7 +1783,6 @@ fn variable_row(index: usize) -> impl Widget<State> {
                                 .speedrun_com_variables()
                                 .find(|(name, _)| *name == variable.name.as_str())
                                 .map(|(_, value)| value.clone())
-                                .or_else(|| variable.default.clone())
                                 .unwrap_or_default()
                         },
                         move |state: &mut State, value| {
@@ -1771,17 +1790,36 @@ fn variable_row(index: usize) -> impl Widget<State> {
                                 return;
                             };
                             let name = variable.name.clone();
-                            state
-                                .editor
-                                .borrow_mut()
-                                .as_mut()
-                                .unwrap()
-                                .set_speedrun_com_variable(name, value);
+                            {
+                                let mut editor = state.editor.borrow_mut();
+                                let editor = editor.as_mut().unwrap();
+                                if value.is_empty() {
+                                    editor.remove_speedrun_com_variable(&name);
+                                } else {
+                                    editor.set_speedrun_com_variable(name, value);
+                                }
+                            }
                             refresh(state);
                         },
                     ))
                     .expand_width(),
                 1.0,
+            )
+            .with_spacer(BUTTON_SPACING)
+            .with_child(
+                Button::new("Clear").on_click(move |_, state: &mut State, _| {
+                    let Some(variable) = state.api.variables.get(index) else {
+                        return;
+                    };
+                    let name = variable.name.clone();
+                    state
+                        .editor
+                        .borrow_mut()
+                        .as_mut()
+                        .unwrap()
+                        .remove_speedrun_com_variable(&name);
+                    refresh(state);
+                }),
             )
             .with_spacer(BUTTON_SPACING)
             .with_child(
