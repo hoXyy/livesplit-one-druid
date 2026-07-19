@@ -2,7 +2,7 @@
 
 pkgname=livesplit-one-druid-git
 _pkgname=livesplit-one-druid
-pkgver=0.7.2.r141.gba94931
+pkgver=0.7.2.r142.g86f2402
 pkgrel=1
 pkgdesc="Desktop version of LiveSplit One using the Druid framework"
 arch=('x86_64')
