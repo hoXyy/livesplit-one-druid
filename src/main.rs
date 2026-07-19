@@ -38,6 +38,8 @@ mod window_settings_editor;
 
 #[cfg(feature = "auto-splitting")]
 mod autosplitter_editor;
+#[cfg(feature = "auto-splitting")]
+mod autosplitter_registry;
 
 mod software_renderer;
 // mod piet_renderer;

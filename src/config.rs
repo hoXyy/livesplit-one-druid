@@ -94,7 +94,33 @@ struct General {
     can_save_layout: bool,
     timing_method: Option<TimingMethod>,
     comparison: Option<String>,
+    /// Legacy global auto-splitter path. Migrated on load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_splitter: Option<PathBuf>,
+    #[serde(default)]
+    auto_splitters: BTreeMap<PathBuf, AutoSplitterAssociation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum AutoSplitterAssociation {
+    Local {
+        path: PathBuf,
+    },
+    Registry {
+        game: String,
+        last_url: String,
+        cached_path: PathBuf,
+    },
+}
+
+impl AutoSplitterAssociation {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Local { path } => path,
+            Self::Registry { cached_path, .. } => cached_path,
+        }
+    }
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -142,7 +168,7 @@ impl Config {
         let mut cfg = Self::parse().unwrap_or_default();
         cfg.load_splits_path(cli.splits);
         cfg.load_layout_path(cli.layout);
-        cfg.load_autosplitter_path(cli.autosplitter);
+        cfg.migrate_and_load_autosplitter(cli.autosplitter);
         cfg.save_config();
         cfg
     }
@@ -177,11 +203,13 @@ impl Config {
         self.general.layout = Some(layout_file);
     }
 
-    fn load_autosplitter_path(&mut self, autosplitter_file: Option<PathBuf>) {
-        if autosplitter_file.is_none() {
-            return;
-        };
-        self.general.auto_splitter = autosplitter_file;
+    fn migrate_and_load_autosplitter(&mut self, autosplitter_file: Option<PathBuf>) {
+        let path = autosplitter_file.or_else(|| self.general.auto_splitter.take());
+        if let (Some(splits), Some(path)) = (self.splits.current.clone(), path) {
+            self.general
+                .auto_splitters
+                .insert(splits, AutoSplitterAssociation::Local { path });
+        }
     }
 
     fn save_config(&self) -> Option<()> {
@@ -325,6 +353,10 @@ impl Config {
         timer.set_run(default_run()).map_err(drop).unwrap();
         self.splits.can_save = false;
         self.splits.current = None;
+        #[cfg(feature = "auto-splitting")]
+        {
+            // The runtime is unloaded by the caller, which owns it.
+        }
         self.save_config();
     }
 
@@ -362,7 +394,7 @@ impl Config {
         }
 
         #[cfg(feature = "auto-splitting")]
-        auto_splitter.reload(shared_timer.clone())?;
+        self.load_associated_auto_splitter(auto_splitter, shared_timer.clone())?;
 
         Ok(())
     }
@@ -413,11 +445,19 @@ impl Config {
         fs::write(&path, &buf).context("Failed writing the file.")?;
         timer.mark_as_unmodified();
 
+        let old_path = self.splits.current.clone();
         if !self.splits.can_save {
             self.splits.remove_from_history();
         }
         self.splits.can_save = true;
-        self.splits.current = Some(path);
+        self.splits.current = Some(path.clone());
+        if let Some(association) = old_path
+            .as_ref()
+            .and_then(|old| self.general.auto_splitters.get(old))
+            .cloned()
+        {
+            self.general.auto_splitters.insert(path, association);
+        }
         self.splits.add_to_history(timer.run());
 
         self.save_config();
@@ -502,21 +542,26 @@ impl Config {
         self.general.layout.is_some() && self.general.can_save_layout
     }
 
-    pub fn open_auto_splitter(
-        &mut self,
-        #[cfg(feature = "auto-splitting")] shared_timer: &SharedTimer,
-        #[cfg(feature = "auto-splitting")] runtime: &livesplit_core::auto_splitting::Runtime<
-            SharedTimer,
-        >,
-        path: &Path,
-    ) -> Result<()> {
-        self.general.auto_splitter = Some(path.into());
+    pub fn auto_splitter_association(&self) -> Option<&AutoSplitterAssociation> {
+        self.splits
+            .current
+            .as_ref()
+            .and_then(|path| self.general.auto_splitters.get(path))
+    }
+
+    pub fn set_auto_splitter_association(&mut self, association: Option<AutoSplitterAssociation>) {
+        let Some(path) = self.splits.current.clone() else {
+            return;
+        };
+        match association {
+            Some(association) => {
+                self.general.auto_splitters.insert(path, association);
+            }
+            None => {
+                self.general.auto_splitters.remove(&path);
+            }
+        }
         self.save_config();
-        #[cfg(feature = "auto-splitting")]
-        runtime.unload()?;
-        #[cfg(feature = "auto-splitting")]
-        runtime.load(path.into(), shared_timer.clone())?;
-        Ok(())
     }
 
     pub fn set_comparison(&mut self, comparison: String) {
@@ -590,12 +635,25 @@ impl Config {
         runtime: &livesplit_core::auto_splitting::Runtime<SharedTimer>,
         timer: SharedTimer,
     ) {
-        if let Some(auto_splitter) = &self.general.auto_splitter {
-            if let Err(e) = runtime.load(auto_splitter.clone(), timer) {
+        if let Some(auto_splitter) = self.auto_splitter_association() {
+            if let Err(e) = runtime.load(auto_splitter.path().into(), timer) {
                 // TODO: Error chain
                 log::error!("Auto Splitter failed to load: {}", e);
             }
         }
+    }
+
+    #[cfg(feature = "auto-splitting")]
+    fn load_associated_auto_splitter(
+        &self,
+        runtime: &livesplit_core::auto_splitting::Runtime<SharedTimer>,
+        timer: SharedTimer,
+    ) -> Result<()> {
+        runtime.unload()?;
+        if let Some(association) = self.auto_splitter_association() {
+            runtime.load(association.path().into(), timer)?;
+        }
+        Ok(())
     }
 }
 

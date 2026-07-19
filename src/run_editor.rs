@@ -22,12 +22,18 @@ use druid::{
     LinearGradient, Menu, MenuItem, PaintCtx, RenderContext, Selector, Size, Target, TextAlignment,
     UnitPoint, UpdateCtx, Widget, WidgetExt,
 };
+#[cfg(feature = "auto-splitting")]
+use livesplit_core::auto_splitting::{settings::Map as AutoSplitterSettings, Runtime};
+#[cfg(feature = "auto-splitting")]
+use livesplit_core::SharedTimer;
 use livesplit_core::{
     run::editor,
     settings::{Image, ImageCache, ImageId},
     RunEditor, TimeSpan, TimingMethod,
 };
 
+#[cfg(feature = "auto-splitting")]
+use crate::config::AutoSplitterAssociation;
 use crate::{
     config::Config,
     consts::{
@@ -39,6 +45,35 @@ use crate::{
     formatter_scope::{formatted, optional_time_span, validated, OnFocusLoss},
     speedrun_com, MainState,
 };
+
+#[cfg(feature = "auto-splitting")]
+pub const OPEN_AUTOSPLITTER_SETTINGS: Selector =
+    Selector::new("run-editor-open-autosplitter-settings");
+#[cfg(feature = "auto-splitting")]
+const SELECT_LOCAL_AUTOSPLITTER: Selector = Selector::new("run-editor-select-local-autosplitter");
+#[cfg(feature = "auto-splitting")]
+const LOCAL_AUTOSPLITTER_RESULT: Selector<druid::FileInfo> =
+    Selector::new("run-editor-local-autosplitter-result");
+#[cfg(feature = "auto-splitting")]
+const REMOVE_AUTOSPLITTER: Selector = Selector::new("run-editor-remove-autosplitter");
+#[cfg(feature = "auto-splitting")]
+const REGISTRY_RESULT: Selector<(
+    String,
+    Option<crate::autosplitter_registry::Entry>,
+    Option<String>,
+)> = Selector::new("run-editor-autosplitter-registry-result");
+#[cfg(feature = "auto-splitting")]
+const REGISTRY_DOWNLOAD_RESULT: Selector<(
+    crate::autosplitter_registry::Entry,
+    Option<(PathBuf, PathBuf, String)>,
+    Option<String>,
+)> = Selector::new("run-editor-autosplitter-download-result");
+#[cfg(feature = "auto-splitting")]
+const REGISTRY_AVAILABILITY: Selector<(
+    String,
+    Option<crate::autosplitter_registry::Entry>,
+    Option<String>,
+)> = Selector::new("run-editor-autosplitter-registry-availability");
 
 const GAME_RESULTS: Selector<(u64, String, Arc<[ApiGame]>, Option<String>)> =
     Selector::new("run-editor-src-game-results");
@@ -209,6 +244,25 @@ pub struct State {
     image_cache: Rc<RefCell<ImageCache>>,
     api: ApiState,
     additional_info_tab: bool,
+    #[cfg(feature = "auto-splitting")]
+    #[data(ignore)]
+    runtime: Rc<Runtime<SharedTimer>>,
+    #[cfg(feature = "auto-splitting")]
+    #[data(ignore)]
+    timer: SharedTimer,
+    #[cfg(feature = "auto-splitting")]
+    #[data(ignore)]
+    original_auto_splitter: Option<AutoSplitterAssociation>,
+    #[cfg(feature = "auto-splitting")]
+    #[data(ignore)]
+    pending_auto_splitter: Option<AutoSplitterAssociation>,
+    #[cfg(feature = "auto-splitting")]
+    #[data(ignore)]
+    original_auto_splitter_settings: AutoSplitterSettings,
+    #[cfg(feature = "auto-splitting")]
+    auto_splitter_summary: String,
+    #[cfg(feature = "auto-splitting")]
+    registry_status: String,
 }
 
 impl State {
@@ -216,6 +270,8 @@ impl State {
         editor: RunEditor,
         config: Rc<RefCell<Config>>,
         image_cache: Rc<RefCell<ImageCache>>,
+        #[cfg(feature = "auto-splitting")] runtime: Rc<Runtime<SharedTimer>>,
+        #[cfg(feature = "auto-splitting")] timer: SharedTimer,
     ) -> Self {
         let state =
             Rc::new(editor.state(&mut image_cache.borrow_mut(), livesplit_core::Lang::English));
@@ -229,6 +285,12 @@ impl State {
         //     image.height() as _,
         // ));
 
+        #[cfg(feature = "auto-splitting")]
+        let original_auto_splitter = config.borrow().auto_splitter_association().cloned();
+        #[cfg(feature = "auto-splitting")]
+        let original_auto_splitter_settings = runtime.settings_map().unwrap_or_default();
+        #[cfg(feature = "auto-splitting")]
+        let auto_splitter_summary = association_summary(original_auto_splitter.as_ref());
         Self {
             state,
             config,
@@ -238,7 +300,335 @@ impl State {
             image_cache,
             api: ApiState::default(),
             additional_info_tab: false,
+            #[cfg(feature = "auto-splitting")]
+            runtime,
+            #[cfg(feature = "auto-splitting")]
+            timer,
+            #[cfg(feature = "auto-splitting")]
+            pending_auto_splitter: original_auto_splitter.clone(),
+            #[cfg(feature = "auto-splitting")]
+            original_auto_splitter,
+            #[cfg(feature = "auto-splitting")]
+            original_auto_splitter_settings,
+            #[cfg(feature = "auto-splitting")]
+            auto_splitter_summary,
+            #[cfg(feature = "auto-splitting")]
+            registry_status: "Checking registry availability…".to_owned(),
         }
+    }
+
+    #[cfg(feature = "auto-splitting")]
+    pub fn commit_auto_splitter(&self) {
+        self.config
+            .borrow_mut()
+            .set_auto_splitter_association(self.pending_auto_splitter.clone());
+    }
+
+    #[cfg(feature = "auto-splitting")]
+    pub fn revert_auto_splitter(&self) {
+        // Always remove the pending module first. If restoration fails, this
+        // guarantees that the newly selected module is not left active.
+        let _ = self.runtime.unload();
+        if let Some(original) = &self.original_auto_splitter {
+            if let Err(error) = self
+                .runtime
+                .load(original.path().into(), self.timer.clone())
+            {
+                log::error!("Failed restoring Auto Splitter: {error}");
+                return;
+            }
+            self.runtime
+                .set_settings_map(self.original_auto_splitter_settings.clone());
+        }
+    }
+}
+
+#[cfg(feature = "auto-splitting")]
+fn association_summary(association: Option<&AutoSplitterAssociation>) -> String {
+    match association {
+        Some(AutoSplitterAssociation::Local { path }) => {
+            format!("Local — {}", path.display())
+        }
+        Some(AutoSplitterAssociation::Registry {
+            game, cached_path, ..
+        }) => {
+            format!("Registry-managed ({game}) — {}", cached_path.display())
+        }
+        None => "None".to_owned(),
+    }
+}
+
+#[cfg(feature = "auto-splitting")]
+fn autosplitter_section() -> impl Widget<State> {
+    let has_saved_path = |state: &State, _: &Env| state.config.borrow().splits_path().is_some();
+    let has_module = |state: &State, _: &Env| state.pending_auto_splitter.is_some();
+    Flex::column()
+        .with_child(Label::new("Auto-splitter").with_text_size(16.0))
+        .with_spacer(4.0)
+        .with_child(Label::dynamic(|state: &State, _| {
+            state.auto_splitter_summary.clone()
+        }))
+        .with_spacer(4.0)
+        .with_child(
+            Label::dynamic(|state: &State, _| state.registry_status.clone())
+                .with_text_color(Color::grey8(0xb0)),
+        )
+        .with_spacer(BUTTON_SPACING)
+        .with_child(
+            Flex::row()
+                .with_child(
+                    Button::new("Select / Change…")
+                        .on_click(|ctx, state: &mut State, _| {
+                            let game = state.state.game.clone();
+                            let sink = ctx.get_external_handle();
+                            std::thread::spawn(move || {
+                                let result = crate::autosplitter_registry::load_cached_or_refresh()
+                                    .map(|entries| {
+                                        crate::autosplitter_registry::matching(&entries, &game)
+                                            .cloned()
+                                    });
+                                let (entry, error) = match result {
+                                    Ok(entry) => (entry, None),
+                                    Err(error) => (None, Some(error.to_string())),
+                                };
+                                let _ = sink.submit_command(
+                                    REGISTRY_RESULT,
+                                    (game, entry, error),
+                                    Target::Auto,
+                                );
+                            });
+                        })
+                        .disabled_if(move |state, env| !has_saved_path(state, env)),
+                )
+                .with_spacer(BUTTON_SPACING)
+                .with_child(
+                    Button::new("Settings…")
+                        .on_click(|ctx, _, _| ctx.submit_command(OPEN_AUTOSPLITTER_SETTINGS))
+                        .disabled_if(move |state, env| !has_module(state, env)),
+                )
+                .with_spacer(BUTTON_SPACING)
+                .with_child(
+                    Button::new("Remove")
+                        .on_click(|ctx, _, _| ctx.submit_command(REMOVE_AUTOSPLITTER))
+                        .disabled_if(move |state, env| !has_module(state, env)),
+                ),
+        )
+        .padding(8.0)
+        .border(BUTTON_BORDER, 1.0)
+}
+
+#[cfg(feature = "auto-splitting")]
+struct AutoSplitterController;
+
+#[cfg(feature = "auto-splitting")]
+fn request_registry_availability(sink: druid::ExtEventSink, game: String) {
+    std::thread::spawn(move || {
+        let result = crate::autosplitter_registry::load_cached_or_refresh()
+            .map(|entries| crate::autosplitter_registry::matching(&entries, &game).cloned());
+        let (entry, error) = match result {
+            Ok(entry) => (entry, None),
+            Err(error) => (None, Some(error.to_string())),
+        };
+        let _ = sink.submit_command(REGISTRY_AVAILABILITY, (game, entry, error), Target::Auto);
+    });
+}
+
+#[cfg(feature = "auto-splitting")]
+impl<W: Widget<State>> Controller<State, W> for AutoSplitterController {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut State,
+        env: &Env,
+    ) {
+        if let Event::Command(command) = event {
+            if let Some((game, entry, error)) = command.get(REGISTRY_AVAILABILITY) {
+                // Ignore stale responses after the game name has changed.
+                if data.state.game == *game {
+                    data.registry_status = match entry {
+                        Some(entry) if entry.installable => format!(
+                            "Registry auto-splitter available: {} ({})",
+                            entry.game,
+                            entry.compatibility.label()
+                        ),
+                        Some(entry) => format!(
+                            "Registry entry available, but unsupported: {}",
+                            entry.compatibility.label()
+                        ),
+                        None if error.is_some() => {
+                            "Registry availability could not be checked.".to_owned()
+                        }
+                        None => "No registry auto-splitter found for this game.".to_owned(),
+                    };
+                }
+                ctx.set_handled();
+                return;
+            }
+            if command.is(SELECT_LOCAL_AUTOSPLITTER) {
+                ctx.submit_command(
+                    commands::SHOW_OPEN_PANEL.with(
+                        druid::FileDialogOptions::new()
+                            .title("Select Local WASM Auto-splitter")
+                            .allowed_types(vec![druid::FileSpec {
+                                name: "WASM Auto-splitters",
+                                extensions: &["wasm"],
+                            }])
+                            .accept_command(LOCAL_AUTOSPLITTER_RESULT),
+                    ),
+                );
+                return;
+            }
+            if let Some((game, entry, error)) = command.get(REGISTRY_RESULT) {
+                let install = entry.as_ref().filter(|entry| entry.installable).and_then(|entry| {
+                    native_dialog::DialogBuilder::message()
+                        .set_title("Select Auto-splitter")
+                        .set_text(&format!(
+                            "{} — {}. {} Install this registry-managed auto-splitter? Choose No to select a local WASM file.",
+                            entry.game,
+                            entry.compatibility.label(),
+                            entry.description
+                        ))
+                        .confirm()
+                        .show()
+                        .ok()
+                        .filter(|answer| *answer)
+                        .map(|_| entry.clone())
+                });
+                if let Some(entry) = install {
+                    let sink = ctx.get_external_handle();
+                    std::thread::spawn(move || {
+                        let result = crate::autosplitter_registry::download_to_temporary(&entry);
+                        let (download, error) = match result {
+                            Ok(download) => (Some(download), None),
+                            Err(error) => (None, Some(error.to_string())),
+                        };
+                        let _ = sink.submit_command(
+                            REGISTRY_DOWNLOAD_RESULT,
+                            (entry, download, error),
+                            Target::Auto,
+                        );
+                    });
+                } else {
+                    if let Some(error) = error {
+                        log::warn!("Could not refresh Auto Splitter registry: {error}");
+                    } else if entry.is_none() {
+                        log::info!("No registry Auto Splitter exactly matches {game}");
+                    }
+                    ctx.submit_command(SELECT_LOCAL_AUTOSPLITTER);
+                }
+                ctx.set_handled();
+                return;
+            }
+            if let Some((entry, download, error)) = command.get(REGISTRY_DOWNLOAD_RESULT) {
+                if let Some(error) = error {
+                    crate::config::show_error(anyhow::anyhow!(
+                        "Auto Splitter installation failed: {error}"
+                    ));
+                } else if data.timer.read().unwrap().current_phase()
+                    != livesplit_core::TimerPhase::NotRunning
+                {
+                    log::info!("Discarding Auto Splitter update while timer is running");
+                    if let Some((temporary, _, _)) = download {
+                        let _ = std::fs::remove_file(temporary);
+                    }
+                } else if let Some((temporary, destination, url)) = download {
+                    match data.runtime.load(temporary.clone(), data.timer.clone()) {
+                        Ok(()) => {
+                            if let Err(error) = std::fs::rename(&temporary, &destination) {
+                                let _ = data.runtime.unload();
+                                crate::config::show_error(anyhow::anyhow!(
+                                    "Could not install Auto Splitter: {error}"
+                                ));
+                            } else {
+                                data.pending_auto_splitter =
+                                    Some(AutoSplitterAssociation::Registry {
+                                        game: entry.game.clone(),
+                                        last_url: url.clone(),
+                                        cached_path: destination.clone(),
+                                    });
+                                data.auto_splitter_summary = format!(
+                                    "{}\n{}\n{}",
+                                    association_summary(data.pending_auto_splitter.as_ref()),
+                                    entry.compatibility.label(),
+                                    entry.description
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            let _ = std::fs::remove_file(temporary);
+                            crate::config::show_error(anyhow::anyhow!(
+                                "Downloaded Auto Splitter failed to load: {error}"
+                            ));
+                        }
+                    }
+                }
+                ctx.set_handled();
+                return;
+            }
+            if let Some(file) = command.get(LOCAL_AUTOSPLITTER_RESULT) {
+                let association = AutoSplitterAssociation::Local {
+                    path: file.path().to_path_buf(),
+                };
+                match data
+                    .runtime
+                    .load(association.path().into(), data.timer.clone())
+                {
+                    Ok(()) => {
+                        data.pending_auto_splitter = Some(association);
+                        data.auto_splitter_summary =
+                            association_summary(data.pending_auto_splitter.as_ref());
+                    }
+                    Err(error) => crate::config::show_error(anyhow::anyhow!(
+                        "Auto Splitter failed to load: {error}"
+                    )),
+                }
+                ctx.set_handled();
+                return;
+            }
+            if command.is(REMOVE_AUTOSPLITTER) {
+                if let Err(error) = data.runtime.unload() {
+                    crate::config::show_error(anyhow::anyhow!(
+                        "Auto Splitter failed to unload: {error}"
+                    ));
+                } else {
+                    data.pending_auto_splitter = None;
+                    data.auto_splitter_summary = association_summary(None);
+                }
+                ctx.set_handled();
+                return;
+            }
+        }
+        child.event(ctx, event, data, env);
+    }
+
+    fn lifecycle(
+        &mut self,
+        child: &mut W,
+        ctx: &mut LifeCycleCtx,
+        event: &LifeCycle,
+        data: &State,
+        env: &Env,
+    ) {
+        if matches!(event, LifeCycle::WidgetAdded) {
+            request_registry_availability(ctx.get_external_handle(), data.state.game.clone());
+        }
+        child.lifecycle(ctx, event, data, env);
+    }
+
+    fn update(
+        &mut self,
+        child: &mut W,
+        ctx: &mut UpdateCtx,
+        old_data: &State,
+        data: &State,
+        env: &Env,
+    ) {
+        if old_data.state.game != data.state.game {
+            request_registry_availability(ctx.get_external_handle(), data.state.game.clone());
+        }
+        child.update(ctx, old_data, data, env);
     }
 }
 
@@ -1846,8 +2236,10 @@ fn link_layout_toggle() -> impl Widget<State> {
 }
 
 pub fn root_widget() -> impl Widget<State> {
-    Flex::column()
-        .with_flex_child(run_editor(), 1.0)
+    let content = Flex::column().with_flex_child(run_editor(), 1.0);
+    #[cfg(feature = "auto-splitting")]
+    let content = content.with_child(autosplitter_section());
+    let content = content
         .with_spacer(MARGIN)
         .with_child(
             Flex::row()
@@ -1873,7 +2265,10 @@ pub fn root_widget() -> impl Widget<State> {
                 ),
         )
         .padding(MARGIN)
-        .controller(SpeedrunComController)
+        .controller(SpeedrunComController);
+    #[cfg(feature = "auto-splitting")]
+    let content = content.controller(AutoSplitterController);
+    content
 }
 
 struct OtherButtonWidget<T> {

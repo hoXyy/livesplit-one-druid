@@ -2422,6 +2422,7 @@ dependencies = [
  "mimalloc",
  "native-dialog",
  "once_cell",
+ "roxmltree",
  "serde",
  "serde_json",
  "serde_yaml",

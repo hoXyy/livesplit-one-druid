@@ -15,6 +15,8 @@ use druid::{
     FileInfo, FileSpec, LayoutCtx, LifeCycle, LifeCycleCtx, Menu, MenuItem, Point, Selector, Size,
     UpdateCtx, Widget, WidgetExt, WindowDesc, WindowId, WindowLevel,
 };
+#[cfg(feature = "auto-splitting")]
+use druid::{Command, Handled, Target};
 use livesplit_core::{LayoutEditor, RunEditor, TimerPhase, TimingMethod};
 
 #[cfg(feature = "auto-splitting")]
@@ -84,7 +86,6 @@ impl Intent {
     const NEW_LAYOUT: Self = Self(1 << 9);
     const OPEN_LAYOUT: Self = Self(1 << 10);
     const EXIT: Self = Self(1 << 11);
-    const OPEN_AUTO_SPLITTER: Self = Self(1 << 12);
 
     fn contains(self, other: Self) -> bool {
         (self.0 & other.0) == other.0
@@ -110,8 +111,6 @@ const CONTEXT_MENU_EDIT_LAYOUT: Selector = Selector::new("context-menu-edit-layo
 const CONTEXT_MENU_OPEN_LAYOUT: Selector<FileInfo> = Selector::new("context-menu-open-layout");
 const CONTEXT_MENU_SAVE_LAYOUT_AS: Selector<FileInfo> =
     Selector::new("context-menu-save-layout-as");
-const CONTEXT_MENU_OPEN_AUTO_SPLITTER: Selector<FileInfo> =
-    Selector::new("context-menu-open-auto-splitter");
 const CONTEXT_MENU_START_OR_SPLIT: Selector = Selector::new("context-menu-start-or-split");
 const CONTEXT_MENU_UNDO_SPLIT: Selector = Selector::new("context-menu-undo-split");
 const CONTEXT_MENU_SKIP_SPLIT: Selector = Selector::new("context-menu-skip-split");
@@ -127,9 +126,6 @@ const CONTEXT_MENU_EDIT_NOTES: Selector = Selector::new("context-menu-edit-notes
 const CONTEXT_MENU_SHOW_NOTES: Selector = Selector::new("context-menu-show-notes");
 const WORLD_RECORD_RESPONSE: Selector<(usize, String, Option<String>)> =
     Selector::new("world-record-response");
-#[cfg(feature = "auto-splitting")]
-const CONTEXT_MENU_EDIT_AUTOSPLITTER_SETTINGS: Selector =
-    Selector::new("context-menu-edit-autosplitter-settings");
 
 impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut MainState, env: &Env) {
@@ -393,18 +389,6 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
                                         CONTEXT_MENU_SET_INTENT.with(Intent::SAVE_LAYOUT_AS),
                                     )),
                             )
-                            .entry(
-                                MenuItem::new("Open Auto-splitter...").command(
-                                    CONTEXT_MENU_SET_INTENT.with(Intent::OPEN_AUTO_SPLITTER),
-                                ),
-                            )
-                            .entry(
-                                #[cfg(feature = "auto-splitting")]
-                                MenuItem::new("Edit Auto-splitter Settings...")
-                                    .command(CONTEXT_MENU_EDIT_AUTOSPLITTER_SETTINGS),
-                                #[cfg(not(feature = "auto-splitting"))]
-                                MenuItem::new("Auto-splitter settings unavailable").enabled(false),
-                            )
                             .separator()
                             .entry(control_menu)
                             .entry(compare_against)
@@ -464,6 +448,10 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
                             editor,
                             data.config.clone(),
                             data.image_cache.clone(),
+                            #[cfg(feature = "auto-splitting")]
+                            data.auto_splitter.clone(),
+                            #[cfg(feature = "auto-splitting")]
+                            data.timer.clone(),
                         ),
                     });
                 } else if let Some(file_info) = command.get(CONTEXT_MENU_OPEN_SPLITS) {
@@ -527,15 +515,6 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
                     if result.is_ok() {
                         data.layout_data.borrow_mut().is_modified = false;
                     }
-                    or_show_error(result);
-                } else if let Some(file_info) = command.get(CONTEXT_MENU_OPEN_AUTO_SPLITTER) {
-                    let result = data.config.borrow_mut().open_auto_splitter(
-                        #[cfg(feature = "auto-splitting")]
-                        &data.timer,
-                        #[cfg(feature = "auto-splitting")]
-                        &data.auto_splitter,
-                        file_info.path(),
-                    );
                     or_show_error(result);
                 } else if command.is(CONTEXT_MENU_START_OR_SPLIT) {
                     data.timer.write().unwrap().split_or_start().ok();
@@ -670,7 +649,7 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
                     });
                 }
                 #[cfg(feature = "auto-splitting")]
-                if command.is(CONTEXT_MENU_EDIT_AUTOSPLITTER_SETTINGS) {
+                if command.is(run_editor::OPEN_AUTOSPLITTER_SETTINGS) {
                     let window = WindowDesc::new(
                         autosplitter_editor::root_widget().lens(AutoSplitterEditorLens),
                     )
@@ -760,6 +739,10 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
 
                     if self.intent.contains(Intent::NEW_SPLITS) {
                         self.intent = self.intent.without(Intent::NEW_SPLITS);
+                        #[cfg(feature = "auto-splitting")]
+                        if let Err(error) = data.auto_splitter.unload() {
+                            log::error!("Failed unloading Auto Splitter: {error}");
+                        }
                         data.config
                             .borrow_mut()
                             .new_splits(&mut data.timer.write().unwrap());
@@ -855,27 +838,6 @@ impl<T: Widget<MainState>> Widget<MainState> for WithMenu<T> {
                                     },
                                 ])
                                 .accept_command(CONTEXT_MENU_OPEN_LAYOUT),
-                        );
-                        ctx.submit_command(open_dialog);
-                        break;
-                    }
-
-                    if self.intent.contains(Intent::OPEN_AUTO_SPLITTER) {
-                        self.intent = self.intent.without(Intent::OPEN_AUTO_SPLITTER);
-                        let open_dialog = commands::SHOW_OPEN_PANEL.with(
-                            FileDialogOptions::new()
-                                .title("Open Auto-splitter")
-                                .allowed_types(vec![
-                                    FileSpec {
-                                        name: "WASM Auto-splitters",
-                                        extensions: &["wasm"],
-                                    },
-                                    FileSpec {
-                                        name: "All Files",
-                                        extensions: &["*.*"],
-                                    },
-                                ])
-                                .accept_command(CONTEXT_MENU_OPEN_AUTO_SPLITTER),
                         );
                         ctx.submit_command(open_dialog);
                         break;
@@ -1121,6 +1083,38 @@ pub fn root_widget() -> impl Widget<MainState> {
 struct WindowManagement;
 
 impl AppDelegate<MainState> for WindowManagement {
+    #[cfg(feature = "auto-splitting")]
+    fn command(
+        &mut self,
+        ctx: &mut DelegateCtx,
+        _target: Target,
+        command: &Command,
+        data: &mut MainState,
+        _env: &Env,
+    ) -> Handled {
+        if command.is(run_editor::OPEN_AUTOSPLITTER_SETTINGS) {
+            if data.autosplitter_editor.is_none() && data.auto_splitter.settings_widgets().is_some()
+            {
+                let window = WindowDesc::new(
+                    autosplitter_editor::root_widget().lens(AutoSplitterEditorLens),
+                )
+                .title("Auto-splitter Settings")
+                .with_min_size((550.0, 400.0))
+                .window_size((550.0, 450.0))
+                .set_level(WindowLevel::AppWindow)
+                .set_always_on_top(true);
+                let window_id = window.id;
+                ctx.new_window(window);
+                data.autosplitter_editor = Some(OpenWindow {
+                    id: window_id,
+                    state: autosplitter_editor::State::new(data.auto_splitter.clone()),
+                });
+            }
+            return Handled::Yes;
+        }
+        Handled::No
+    }
+
     fn window_removed(
         &mut self,
         id: WindowId,
@@ -1130,7 +1124,15 @@ impl AppDelegate<MainState> for WindowManagement {
     ) {
         if let Some(window) = &data.run_editor {
             if id == window.id {
+                #[cfg(feature = "auto-splitting")]
+                if let Some(settings) = &mut data.autosplitter_editor {
+                    // The parent transaction owns the final settings state.
+                    settings.state.closed_with_ok = true;
+                    _ctx.submit_command(commands::CLOSE_WINDOW.to(Target::Window(settings.id)));
+                }
                 if window.state.closed_with_ok {
+                    #[cfg(feature = "auto-splitting")]
+                    window.state.commit_auto_splitter();
                     let run = window.state.editor.borrow_mut().take().unwrap().close();
                     data.timer
                         .write()
@@ -1138,6 +1140,9 @@ impl AppDelegate<MainState> for WindowManagement {
                         .set_run(run)
                         .map_err(drop)
                         .unwrap();
+                } else {
+                    #[cfg(feature = "auto-splitting")]
+                    window.state.revert_auto_splitter();
                 }
                 data.run_editor = None;
                 let _ = HOTKEY_SYSTEM.write().unwrap().as_mut().unwrap().activate();
