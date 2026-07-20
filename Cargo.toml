@@ -27,6 +27,7 @@ fontdb = "0.16.2"
 clap = { version = "4.5.20", features = ["derive"] }
 ureq = "2.12.1"
 roxmltree = "0.20.0"
+pulldown-cmark = { version = "0.13.0", default-features = false }
 
 [build-dependencies]
 embed-resource = "3.0.1"
