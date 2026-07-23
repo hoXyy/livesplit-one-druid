@@ -1,59 +1,45 @@
-# LiveSplit One Druid
+# LiveSplit One GTK
 
-A prototype Desktop version of LiveSplit One, using the Druid framework and the multiplatform
-[livesplit-core][livesplit-core] library.
+A Linux desktop version of LiveSplit One built with Relm4, GTK 4, libadwaita,
+and [livesplit-core]. The installed package is `livesplit-one-gtk`; the
+executable remains `livesplit-one`.
 
-The Web Version is available at [one.livesplit.org](https://one.livesplit.org/).
+## Requirements
 
-## Installation Instructions
+- Rust stable
+- GTK 4.16 or newer
+- libadwaita 1.5 or newer
+- X11 development libraries for the X11 placement backend
 
-Download the latest release for your operating system and archictecture here:
-https://github.com/AlexKnauth/livesplit-one-druid/releases/latest
-
-When you run LiveSplit One Druid,
-it needs to have permission to read memory of other processes.
-- On Mac, that might require running it under `sudo`.
-- On Linux, give it permission with one of:
-  - setting the capabilities to include `CAP_SYS_PTRACE`, which can be done with
-    `sudo setcap CAP_SYS_PTRACE=+eip LiveSplitOne` or some variation of that
-  - setting `/proc/sys/kernel/yama/ptrace_scope` to 0, which can be done with
-    `echo "0"|sudo tee /proc/sys/kernel/yama/ptrace_scope`
-  - running it under `sudo`
-- On Windows, it should just work. Windows allows memory reading by default.
-
-## Build Instructions
-
-In order to build LiveSplit One you need the [Rust
-Compiler](https://www.rust-lang.org/). You can then build and run the project
-with:
+Build and test with:
 
 ```bash
-cargo run
+cargo build --release --locked
+cargo test --all-features
 ```
 
-In order to build and run a release build, use the following command:
+Linux is the only supported platform. On X11, the timer restores absolute
+placement and requests always-on-top behavior. Wayland uses an ordinary
+transparent toplevel: movement and resizing are handled by the compositor,
+exact placement and always-on-top are unavailable, and stored placement is
+preserved rather than overwritten.
+
+## Configuration compatibility
+
+Existing configuration, splits, layouts, notes, hotkeys, history, and
+autosplitter associations are retained. The configuration remains at:
+
+```text
+~/.local/share/livesplitone/config.yml
+```
+
+Autosplitters that read another process's memory may require `CAP_SYS_PTRACE`:
 
 ```bash
-cargo run --release
+sudo setcap CAP_SYS_PTRACE=+eip /usr/bin/livesplit-one
 ```
 
-## Configuration
+The web version is available at [one.livesplit.org].
 
-The config file and log file are located in the local data directory from [data_local_dir][data_local_dir]:
-- Windows: `C:\Users\<name>\AppData\Local\LiveSplit\LiveSplit One\data\config.yml`
-- Mac: `/Users/<name>/Library/Application Support/org.LiveSplit.LiveSplit-One/config.yml`
-- Linux: `/home/<name>/.local/share/livesplitone/config.yml` or `/root/.local/share/livesplitone/config.yml` if running as `sudo`
-
-If you want a log file, edit the `log` section of the config file to say
-
-```yaml
-log:
-  enable: true
-  level: INFO
-  clear: true
-```
-
- Once you run it with an autosplitter open, a `log.txt` file should appear in the same directory as the config.
-
-  [data_local_dir]: https://docs.rs/directories/latest/directories/struct.ProjectDirs.html#method.data_local_dir
-  [livesplit-core]: https://github.com/LiveSplit/livesplit-core
+[livesplit-core]: https://github.com/LiveSplit/livesplit-core
+[one.livesplit.org]: https://one.livesplit.org/

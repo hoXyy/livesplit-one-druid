@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=LiveSplit One
-Comment=A desktop LiveSplit One timer for speedrunners
-Exec=livesplit-one-druid
+Comment=A LiveSplit One timer for Linux
+Exec=livesplit-one
 Icon=livesplit-one
 Categories=Game;Utility;
 Terminal=false
-StartupWMClass=LiveSplit-One
+StartupWMClass=org.livesplit.LiveSplitOne
