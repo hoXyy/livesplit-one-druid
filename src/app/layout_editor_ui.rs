@@ -41,6 +41,14 @@ pub(super) fn build_layout_editor(
     component_area.set_margin_top(12);
     component_area.set_margin_bottom(6);
     let component_buttons = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let add = gtk::Button::with_label("Add");
+    let add_parent = window.clone();
+    let add_editor = editor.clone();
+    let add_list = components.clone();
+    add.connect_clicked(move |_| {
+        open_add_component_window(&add_parent, &add_editor, &add_list);
+    });
+    component_buttons.append(&add);
     let mut operation_buttons = Vec::new();
     for (label, operation) in [
         ("Remove", 0_u8),
@@ -65,44 +73,6 @@ pub(super) fn build_layout_editor(
         component_buttons.append(&button);
         operation_buttons.push(button);
     }
-    let add_kind = gtk::DropDown::from_strings(&[
-        "Current Comparison",
-        "Current Pace",
-        "Delta",
-        "Detailed Timer",
-        "Graph",
-        "PB Chance",
-        "Possible Time Save",
-        "Previous Segment",
-        "Segment Time",
-        "Separator",
-        "Splits",
-        "Sum of Best",
-        "Text",
-        "Timer",
-        "Title",
-        "Total Playtime",
-        "Alternate Timing Method",
-        "Blank Space",
-        "World Record",
-        "Group",
-        "Carousel",
-    ]);
-    add_kind.set_selected(10);
-    add_kind.set_tooltip_text(Some(
-        "Groups lay out children across the current direction; carousels rotate through children",
-    ));
-    component_buttons.append(&add_kind);
-    let add = gtk::Button::with_label("Add");
-    let add_editor = editor.clone();
-    let add_list = components.clone();
-    add.connect_clicked(move |_| {
-        if let Some(editor) = add_editor.borrow_mut().as_mut() {
-            editor.add_component(new_layout_component(add_kind.selected()));
-        }
-        populate_component_list(&add_list, &add_editor);
-    });
-    component_buttons.append(&add);
     component_area.append(&component_buttons);
     component_area.append(&sidebar);
     component_area.set_vexpand(true);
@@ -210,6 +180,123 @@ pub(super) fn build_layout_editor(
         glib::Propagation::Proceed
     });
     window
+}
+
+const COMPONENT_NAMES: &[&str] = &[
+    "Current Comparison",
+    "Current Pace",
+    "Delta",
+    "Detailed Timer",
+    "Graph",
+    "PB Chance",
+    "Possible Time Save",
+    "Previous Segment",
+    "Segment Time",
+    "Separator",
+    "Splits",
+    "Sum of Best",
+    "Text",
+    "Timer",
+    "Title",
+    "Total Playtime",
+    "Alternate Timing Method",
+    "Blank Space",
+    "World Record",
+    "Group",
+    "Carousel",
+];
+
+fn open_add_component_window(
+    parent: &adw::ApplicationWindow,
+    editor: &Rc<RefCell<Option<livesplit_core::LayoutEditor>>>,
+    components: &gtk::ListBox,
+) {
+    let window = adw::ApplicationWindow::builder()
+        .title("Add Component")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(420)
+        .default_height(520)
+        .build();
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&adw::HeaderBar::new());
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let choices = gtk::ListBox::new();
+    choices.set_selection_mode(gtk::SelectionMode::Single);
+    choices.add_css_class("boxed-list");
+    for name in COMPONENT_NAMES {
+        let row = gtk::ListBoxRow::new();
+        row.set_child(Some(
+            &gtk::Label::builder()
+                .label(*name)
+                .xalign(0.0)
+                .margin_start(12)
+                .margin_end(12)
+                .margin_top(10)
+                .margin_bottom(10)
+                .build(),
+        ));
+        choices.append(&row);
+    }
+    choices.select_row(choices.row_at_index(10).as_ref());
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&choices)
+        .build();
+    scroller.set_margin_start(12);
+    scroller.set_margin_end(12);
+    scroller.set_margin_top(12);
+    content.append(&scroller);
+
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    buttons.set_halign(gtk::Align::End);
+    buttons.set_margin_top(12);
+    buttons.set_margin_end(12);
+    buttons.set_margin_bottom(12);
+    let cancel = gtk::Button::with_label("Cancel");
+    let add = gtk::Button::with_label("Add");
+    add.add_css_class("suggested-action");
+    buttons.append(&cancel);
+    buttons.append(&add);
+    content.append(&buttons);
+    toolbar.set_content(Some(&content));
+    window.set_content(Some(&toolbar));
+
+    let cancel_window = window.clone();
+    cancel.connect_clicked(move |_| cancel_window.close());
+
+    let add_window = window.clone();
+    let add_choices = choices.clone();
+    let add_editor = editor.clone();
+    let add_components = components.clone();
+    add.connect_clicked(move |_| {
+        let Some(row) = add_choices.selected_row() else {
+            return;
+        };
+        add_layout_component(row.index() as u32, &add_editor, &add_components);
+        add_window.close();
+    });
+
+    let activate_window = window.clone();
+    let activate_editor = editor.clone();
+    let activate_components = components.clone();
+    choices.connect_row_activated(move |_, row| {
+        add_layout_component(row.index() as u32, &activate_editor, &activate_components);
+        activate_window.close();
+    });
+    window.present();
+}
+
+fn add_layout_component(
+    index: u32,
+    editor: &Rc<RefCell<Option<livesplit_core::LayoutEditor>>>,
+    components: &gtk::ListBox,
+) {
+    if let Some(editor) = editor.borrow_mut().as_mut() {
+        editor.add_component(new_layout_component(index));
+    }
+    populate_component_list(components, editor);
 }
 
 fn new_layout_component(index: u32) -> livesplit_core::layout::Component {
