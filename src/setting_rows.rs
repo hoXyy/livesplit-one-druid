@@ -44,7 +44,7 @@ pub fn build_setting_row(field: &Field, changed: SettingChanged) -> adw::Prefere
                 .numeric(true)
                 .build();
             let enabled = Rc::new(Cell::new(value.is_some()));
-            row.set_sensitive(enabled.get());
+            row.set_editable(enabled.get());
             let toggle = gtk::Switch::builder()
                 .active(enabled.get())
                 .valign(gtk::Align::Center)
@@ -60,7 +60,7 @@ pub fn build_setting_row(field: &Field, changed: SettingChanged) -> adw::Prefere
             let toggle_row = row.clone();
             toggle.connect_active_notify(move |toggle| {
                 enabled.set(toggle.is_active());
-                toggle_row.set_sensitive(toggle.is_active());
+                toggle_row.set_editable(toggle.is_active());
                 changed(Value::OptionalUInt(
                     toggle
                         .is_active()
@@ -103,7 +103,7 @@ pub fn build_setting_row(field: &Field, changed: SettingChanged) -> adw::Prefere
                 .tooltip_text(field.tooltip.as_ref())
                 .build();
             let enabled = Rc::new(Cell::new(value.is_some()));
-            row.set_sensitive(enabled.get());
+            row.set_editable(enabled.get());
             let toggle = gtk::Switch::builder()
                 .active(enabled.get())
                 .valign(gtk::Align::Center)
@@ -121,7 +121,7 @@ pub fn build_setting_row(field: &Field, changed: SettingChanged) -> adw::Prefere
             let toggle_changed = changed.clone();
             toggle.connect_active_notify(move |toggle| {
                 toggle_enabled.set(toggle.is_active());
-                toggle_row.set_sensitive(toggle.is_active());
+                toggle_row.set_editable(toggle.is_active());
                 toggle_changed(Value::OptionalString(
                     toggle.is_active().then(|| toggle_row.text().into()),
                 ));

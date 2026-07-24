@@ -1,5 +1,99 @@
 use super::*;
 
+fn active_segment_index(editor: &livesplit_core::RunEditor) -> usize {
+    editor
+        .state(&mut ImageCache::new(), livesplit_core::Lang::English)
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            livesplit_core::run::editor::RowState::Segment(segment)
+                if segment.selected == livesplit_core::run::editor::SelectionState::Active =>
+            {
+                Some(segment.segment_index)
+            }
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
+fn move_selected_segment_to(editor: &mut livesplit_core::RunEditor, target: usize) {
+    let limit = editor.run().len().saturating_mul(2);
+    for _ in 0..limit {
+        let current = active_segment_index(editor);
+        if current == target {
+            break;
+        }
+        if current < target {
+            editor.move_segments_down();
+        } else {
+            editor.move_segments_up();
+        }
+    }
+}
+
+fn move_segment_into_group(
+    editor: &mut livesplit_core::RunEditor,
+    source: usize,
+    group_index: usize,
+) {
+    let Some(group) = editor.run().segment_groups().groups().get(group_index) else {
+        return;
+    };
+    let (start, end) = (group.start(), group.end());
+    if (start..end).contains(&source) {
+        return;
+    }
+
+    editor.select_only(source);
+    let steps = if source < start {
+        start - source
+    } else {
+        source - end + 1
+    };
+    for _ in 0..steps {
+        if source < start {
+            editor.move_segments_down();
+        } else {
+            editor.move_segments_up();
+        }
+    }
+}
+
+fn insert_segment_into_group(editor: &mut livesplit_core::RunEditor, group_index: usize) {
+    let Some(group) = editor.run().segment_groups().groups().get(group_index) else {
+        return;
+    };
+    let start = group.start();
+    let end = group.end();
+    let name = group.name().map(str::to_owned);
+    let icon = group.icon().cloned();
+
+    let _ = editor.select_segment_group(group_index);
+    let _ = editor.remove_selected_segment_groups();
+    editor.select_only(end - 1);
+    editor.insert_segment_above();
+    editor.select_only(start);
+    editor.select_range(end);
+    if editor
+        .create_segment_group_from_selection(name.as_deref())
+        .is_err()
+    {
+        return;
+    }
+
+    if let Some(icon) = icon {
+        let group_index = editor
+            .run()
+            .segment_groups()
+            .groups()
+            .iter()
+            .position(|group| group.start() == start && group.end() == end + 1);
+        if let Some(group_index) = group_index {
+            let _ = editor.set_segment_group_icon(group_index, icon);
+        }
+    }
+}
+
 pub(super) fn populate_run_segments(
     list: &gtk::ListBox,
     editor: &Rc<RefCell<Option<livesplit_core::RunEditor>>>,
@@ -13,21 +107,33 @@ pub(super) fn populate_run_segments(
         .as_ref()
         .unwrap()
         .state(&mut ImageCache::new(), livesplit_core::Lang::English);
-    for segment in state.rows.iter().filter_map(|row| match row {
-        livesplit_core::run::editor::RowState::Segment(segment) => Some(segment),
-        livesplit_core::run::editor::RowState::SegmentGroup(_) => None,
-    }) {
+    for state_row in &state.rows {
+        let livesplit_core::run::editor::RowState::Segment(segment) = state_row else {
+            let livesplit_core::run::editor::RowState::SegmentGroup(group) = state_row else {
+                unreachable!();
+            };
+            let row = segment_group_row(group, editor, list, column_groups);
+            list.append(&row);
+            if group.selected {
+                list.select_row(Some(&row));
+            }
+            continue;
+        };
         let index = segment.segment_index;
         let row = gtk::ListBoxRow::new();
+        if segment.is_indented {
+            row.add_css_class("group-member");
+        }
         let grid = gtk::Grid::builder()
             .column_spacing(8)
-            .margin_start(8)
+            .margin_start(if segment.is_indented { 32 } else { 8 })
             .margin_end(8)
             .margin_top(4)
             .margin_bottom(4)
             .build();
         let icon_box = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         let drag_handle = gtk::Image::from_icon_name("list-drag-handle-symbolic");
+        drag_handle.add_css_class("drag-handle");
         drag_handle.set_tooltip_text(Some("Drag to reorder segment"));
         drag_handle.set_cursor_from_name(Some("grab"));
         let drag_source = gtk::DragSource::new();
@@ -186,15 +292,7 @@ pub(super) fn populate_run_segments(
             }
             if let Some(editor) = drop_editor.borrow_mut().as_mut() {
                 editor.select_only(source);
-                if source < index {
-                    for _ in source..index {
-                        editor.move_segments_down();
-                    }
-                } else {
-                    for _ in index..source {
-                        editor.move_segments_up();
-                    }
-                }
+                move_selected_segment_to(editor, index);
             }
             let refresh_editor = drop_editor.clone();
             let refresh_list = drop_list.clone();
@@ -209,5 +307,222 @@ pub(super) fn populate_run_segments(
         if segment.selected.is_selected_or_active() {
             list.select_row(Some(&row));
         }
+    }
+}
+
+fn segment_group_row(
+    group: &livesplit_core::run::editor::SegmentGroupState,
+    editor: &Rc<RefCell<Option<livesplit_core::RunEditor>>>,
+    list: &gtk::ListBox,
+    column_groups: &Rc<Vec<gtk::SizeGroup>>,
+) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("accent");
+    row.add_css_class("group-header");
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    content.set_margin_start(8);
+    content.set_margin_end(8);
+    content.set_margin_top(6);
+    content.set_margin_bottom(6);
+
+    let collapse = gtk::ToggleButton::new();
+    collapse.set_icon_name("pan-down-symbolic");
+    collapse.add_css_class("flat");
+    collapse.set_tooltip_text(Some("Collapse or expand this group"));
+    let collapse_row = row.clone();
+    collapse.connect_toggled(move |button| {
+        button.set_icon_name(if button.is_active() {
+            "pan-end-symbolic"
+        } else {
+            "pan-down-symbolic"
+        });
+        let mut sibling = collapse_row.next_sibling();
+        while let Some(widget) = sibling {
+            let next = widget.next_sibling();
+            if !widget.has_css_class("group-member") {
+                break;
+            }
+            widget.set_visible(!button.is_active());
+            sibling = next;
+        }
+    });
+    content.append(&collapse);
+
+    let icon_preview = gtk::Image::new();
+    icon_preview.set_pixel_size(24);
+    icon_preview.set_size_request(28, 28);
+    if group.has_explicit_icon {
+        let editor = editor.borrow();
+        if let Some(editor) = editor.as_ref() {
+            let group = &editor.run().segment_groups().groups()[group.group_index];
+            if let Some(icon) = group.icon() {
+                set_icon_preview(&icon_preview, icon.data());
+            }
+        }
+    }
+    content.append(&icon_preview);
+
+    let name = gtk::Entry::builder()
+        .text(group.explicit_name.as_deref().unwrap_or_default())
+        .placeholder_text(&group.name)
+        .hexpand(true)
+        .build();
+    name.set_tooltip_text(Some(
+        "Segment group name; leave empty to use the final segment's name",
+    ));
+    let name_editor = editor.clone();
+    let group_index = group.group_index;
+    name.connect_changed(move |entry| {
+        if let Some(editor) = name_editor.borrow_mut().as_mut() {
+            let text = entry.text();
+            let name = (!text.is_empty()).then_some(text.as_str());
+            let _ = editor.rename_segment_group(group_index, name);
+        }
+    });
+    content.append(&name);
+
+    let choose_icon = gtk::Button::from_icon_name("image-x-generic-symbolic");
+    choose_icon.set_tooltip_text(Some("Choose group icon"));
+    let choose_editor = editor.clone();
+    let choose_preview = icon_preview.clone();
+    choose_icon.connect_clicked(move |button| {
+        let editor = choose_editor.clone();
+        let preview = choose_preview.clone();
+        open_icon_file(button, move |image| {
+            set_icon_preview(&preview, image.data());
+            if let Some(editor) = editor.borrow_mut().as_mut() {
+                let _ = editor.set_segment_group_icon(group_index, image);
+            }
+        });
+    });
+    content.append(&choose_icon);
+
+    let remove_icon = gtk::Button::from_icon_name("edit-delete-symbolic");
+    remove_icon.set_tooltip_text(Some("Remove group icon"));
+    let remove_editor = editor.clone();
+    let remove_preview = icon_preview.clone();
+    remove_icon.connect_clicked(move |_| {
+        if let Some(editor) = remove_editor.borrow_mut().as_mut() {
+            let _ = editor.remove_segment_group_icon(group_index);
+        }
+        set_icon_preview(&remove_preview, &[]);
+    });
+    content.append(&remove_icon);
+
+    let add = gtk::Button::from_icon_name("list-add-symbolic");
+    add.set_tooltip_text(Some("Add a split inside this group"));
+    let add_editor = editor.clone();
+    let add_list = list.clone();
+    let add_groups = column_groups.clone();
+    add.connect_clicked(move |_| {
+        if let Some(editor) = add_editor.borrow_mut().as_mut() {
+            insert_segment_into_group(editor, group_index);
+        }
+        populate_run_segments(&add_list, &add_editor, &add_groups);
+    });
+    content.append(&add);
+
+    let ungroup = gtk::Button::with_label("Ungroup");
+    ungroup.set_tooltip_text(Some("Remove the group while keeping all of its splits"));
+    let ungroup_editor = editor.clone();
+    let ungroup_list = list.clone();
+    let ungroup_groups = column_groups.clone();
+    ungroup.connect_clicked(move |_| {
+        if let Some(editor) = ungroup_editor.borrow_mut().as_mut() {
+            let _ = editor.select_segment_group(group_index);
+            let _ = editor.remove_selected_segment_groups();
+        }
+        populate_run_segments(&ungroup_list, &ungroup_editor, &ungroup_groups);
+    });
+    content.append(&ungroup);
+
+    let drop_target = gtk::DropTarget::new(i32::static_type(), gdk::DragAction::MOVE);
+    let drop_editor = editor.clone();
+    let drop_list = list.clone();
+    let drop_groups = column_groups.clone();
+    drop_target.connect_drop(move |_, value, _, _| {
+        let Ok(source) = value.get::<i32>() else {
+            return false;
+        };
+        if source < 0 {
+            return false;
+        }
+        if let Some(editor) = drop_editor.borrow_mut().as_mut() {
+            move_segment_into_group(editor, source as usize, group_index);
+        }
+        let refresh_editor = drop_editor.clone();
+        let refresh_list = drop_list.clone();
+        let refresh_groups = drop_groups.clone();
+        glib::idle_add_local_once(move || {
+            populate_run_segments(&refresh_list, &refresh_editor, &refresh_groups);
+        });
+        true
+    });
+    row.add_controller(drop_target);
+    row.set_tooltip_text(Some(
+        "Drop a split here to add it to this group; drag members outside to remove them",
+    ));
+    row.set_child(Some(&content));
+    row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{insert_segment_into_group, move_segment_into_group, move_selected_segment_to};
+    use livesplit_core::{Run, RunEditor, Segment};
+
+    fn editor_with_group() -> RunEditor {
+        let mut run = Run::new();
+        for name in ["Intro", "A", "B", "Outro"] {
+            run.push_segment(Segment::new(name));
+        }
+        let mut editor = RunEditor::new(run).unwrap();
+        editor.select_only(1);
+        editor.select_range(2);
+        editor
+            .create_segment_group_from_selection(Some("Chapter"))
+            .unwrap();
+        editor
+    }
+
+    #[test]
+    fn dropping_a_split_on_a_group_adds_it_to_the_group() {
+        let mut editor = editor_with_group();
+
+        move_segment_into_group(&mut editor, 3, 0);
+
+        let group = &editor.run().segment_groups().groups()[0];
+        assert_eq!((group.start(), group.end()), (1, 4));
+    }
+
+    #[test]
+    fn dragging_a_group_member_outside_removes_it_from_the_group() {
+        let mut editor = editor_with_group();
+        editor.select_only(1);
+
+        move_selected_segment_to(&mut editor, 0);
+
+        let group = &editor.run().segment_groups().groups()[0];
+        assert_eq!((group.start(), group.end()), (2, 3));
+        assert_eq!(editor.run().segment(0).name(), "A");
+    }
+
+    #[test]
+    fn adding_to_a_single_split_group_keeps_both_splits_grouped() {
+        let mut run = Run::new();
+        run.push_segment(Segment::new("Only"));
+        run.push_segment(Segment::new("Outro"));
+        let mut editor = RunEditor::new(run).unwrap();
+        editor
+            .create_segment_group_from_selection(Some("Chapter"))
+            .unwrap();
+
+        insert_segment_into_group(&mut editor, 0);
+
+        let group = &editor.run().segment_groups().groups()[0];
+        assert_eq!((group.start(), group.end()), (0, 2));
+        assert_eq!(group.name(), Some("Chapter"));
+        assert_eq!(editor.run().segment(0).name(), "");
+        assert_eq!(editor.run().segment(1).name(), "Only");
     }
 }

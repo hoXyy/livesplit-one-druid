@@ -41,6 +41,7 @@ pub(super) fn build_layout_editor(
     component_area.set_margin_top(12);
     component_area.set_margin_bottom(6);
     let component_buttons = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let mut operation_buttons = Vec::new();
     for (label, operation) in [
         ("Remove", 0_u8),
         ("Duplicate", 1),
@@ -62,7 +63,46 @@ pub(super) fn build_layout_editor(
             populate_component_list(&button_list, &button_editor);
         });
         component_buttons.append(&button);
+        operation_buttons.push(button);
     }
+    let add_kind = gtk::DropDown::from_strings(&[
+        "Current Comparison",
+        "Current Pace",
+        "Delta",
+        "Detailed Timer",
+        "Graph",
+        "PB Chance",
+        "Possible Time Save",
+        "Previous Segment",
+        "Segment Time",
+        "Separator",
+        "Splits",
+        "Sum of Best",
+        "Text",
+        "Timer",
+        "Title",
+        "Total Playtime",
+        "Alternate Timing Method",
+        "Blank Space",
+        "World Record",
+        "Group",
+        "Carousel",
+    ]);
+    add_kind.set_selected(10);
+    add_kind.set_tooltip_text(Some(
+        "Groups lay out children across the current direction; carousels rotate through children",
+    ));
+    component_buttons.append(&add_kind);
+    let add = gtk::Button::with_label("Add");
+    let add_editor = editor.clone();
+    let add_list = components.clone();
+    add.connect_clicked(move |_| {
+        if let Some(editor) = add_editor.borrow_mut().as_mut() {
+            editor.add_component(new_layout_component(add_kind.selected()));
+        }
+        populate_component_list(&add_list, &add_editor);
+    });
+    component_buttons.append(&add);
     component_area.append(&component_buttons);
     component_area.append(&sidebar);
     component_area.set_vexpand(true);
@@ -76,6 +116,32 @@ pub(super) fn build_layout_editor(
     let component_settings = gtk::Button::with_label("Component Settings…");
     buttons.append(&layout_settings);
     buttons.append(&component_settings);
+    let sensitivity_editor = editor.clone();
+    let sensitivity_settings = component_settings.clone();
+    components.connect_row_selected(move |_, row| {
+        let Some(row) = row else {
+            sensitivity_settings.set_sensitive(false);
+            for button in &operation_buttons {
+                button.set_sensitive(false);
+            }
+            return;
+        };
+        let editor = sensitivity_editor.borrow();
+        let Some(editor) = editor.as_ref() else {
+            return;
+        };
+        let state = editor.state(&mut ImageCache::new(), livesplit_core::Lang::English);
+        let index = row.index() as usize;
+        sensitivity_settings.set_sensitive(!state.is_placeholder[index]);
+        for (button, sensitive) in operation_buttons.iter().zip([
+            state.buttons.can_remove,
+            state.buttons.can_duplicate,
+            state.buttons.can_move_up,
+            state.buttons.can_move_down,
+        ]) {
+            button.set_sensitive(sensitive);
+        }
+    });
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     buttons.append(&spacer);
@@ -107,7 +173,18 @@ pub(super) fn build_layout_editor(
         if let Some(editor) = double_editor.borrow_mut().as_mut() {
             editor.select(row.index() as usize);
         }
-        open_layout_settings_window(&double_parent, &double_editor, &double_cache, true);
+        let is_placeholder = double_editor
+            .borrow()
+            .as_ref()
+            .map(|editor| {
+                editor
+                    .state(&mut ImageCache::new(), livesplit_core::Lang::English)
+                    .is_placeholder[row.index() as usize]
+            })
+            .unwrap_or(true);
+        if !is_placeholder {
+            open_layout_settings_window(&double_parent, &double_editor, &double_cache, true);
+        }
     });
 
     let cancel_window = window.clone();
@@ -135,6 +212,37 @@ pub(super) fn build_layout_editor(
     window
 }
 
+fn new_layout_component(index: u32) -> livesplit_core::layout::Component {
+    use livesplit_core::{component, layout::Component};
+
+    match index {
+        0 => component::current_comparison::Component::new().into(),
+        1 => component::current_pace::Component::new().into(),
+        2 => component::delta::Component::new().into(),
+        3 => Component::DetailedTimer(Box::new(component::detailed_timer::Component::new())),
+        4 => component::graph::Component::new().into(),
+        5 => component::pb_chance::Component::new().into(),
+        6 => component::possible_time_save::Component::new().into(),
+        7 => component::previous_segment::Component::new().into(),
+        8 => component::segment_time::Component::new().into(),
+        9 => component::separator::Component::new().into(),
+        10 => component::splits::Component::new(livesplit_core::Lang::English).into(),
+        11 => component::sum_of_best::Component::new().into(),
+        12 => component::text::Component::new().into(),
+        13 => component::timer::Component::new().into(),
+        14 => component::title::Component::new().into(),
+        15 => component::total_playtime::Component::new().into(),
+        16 => component::alternate_timing_method::Component::new().into(),
+        17 => component::blank_space::Component::new().into(),
+        18 => component::world_record::Component::new().into(),
+        19 => component::group::Component::new().into(),
+        20 => component::carousel::Component::new().into(),
+        _ => Component::from(component::splits::Component::new(
+            livesplit_core::Lang::English,
+        )),
+    }
+}
+
 fn populate_component_list(
     list: &gtk::ListBox,
     editor: &Rc<RefCell<Option<livesplit_core::LayoutEditor>>>,
@@ -154,7 +262,11 @@ fn populate_component_list(
             .label(name)
             .xalign(0.0)
             .hexpand(true)
+            .margin_start((state.indent_levels[index] * 20) as i32)
             .build();
+        if state.is_placeholder[index] {
+            label.add_css_class("dim-label");
+        }
         let drag_handle = gtk::Image::from_icon_name("list-drag-handle-symbolic");
         drag_handle.set_tooltip_text(Some("Drag to reorder"));
         drag_handle.set_cursor_from_name(Some("grab"));
@@ -163,11 +275,12 @@ fn populate_component_list(
         drag_source.set_content(Some(&gdk::ContentProvider::for_value(
             &(index as i32).to_value(),
         )));
+        drag_handle.set_visible(!state.is_placeholder[index]);
         drag_handle.add_controller(drag_source);
         row_content.append(&label);
         row_content.append(&drag_handle);
         row.set_child(Some(&row_content));
-        row.set_activatable(true);
+        row.set_activatable(!state.is_placeholder[index]);
         row.set_margin_start(6);
         row.set_margin_end(6);
         row.set_margin_top(3);

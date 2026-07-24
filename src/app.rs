@@ -208,7 +208,7 @@ use layout_editor_ui::build_layout_editor;
 use notes_ui::{build_notes_editor, build_notes_viewer, set_markdown_buffer};
 use run_editor_ui::build_run_editor;
 use settings_ui::build_settings_editor;
-use timer_window::{install_timer_interactions, timer_resize_edge};
+use timer_window::install_timer_interactions;
 
 #[relm4::component(pub)]
 impl SimpleComponent for AppModel {
@@ -995,9 +995,10 @@ impl AppModel {
 
 #[cfg(test)]
 mod tests {
+    use super::timer_window::timer_resize_edge;
     use super::{
         physical_to_logical_size, relevant_changes, scroll_layout, should_mouse_passthrough,
-        timer_resize_edge, Intent, LayoutData, PendingAction,
+        Intent, LayoutData, PendingAction,
     };
     use gtk::gdk;
     use std::cell::RefCell;

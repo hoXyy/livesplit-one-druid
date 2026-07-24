@@ -13,6 +13,133 @@ use run_details_ui::{
 };
 use run_segments::populate_run_segments;
 
+fn desired_run_row_selection(
+    previous: &[i32],
+    clicked: i32,
+    modifiers: gdk::ModifierType,
+    anchor: Option<i32>,
+) -> (Vec<i32>, i32) {
+    let mut desired = if modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+        let anchor = anchor.unwrap_or(clicked);
+        let (start, end) = if anchor <= clicked {
+            (anchor, clicked)
+        } else {
+            (clicked, anchor)
+        };
+        (start..=end).collect::<Vec<_>>()
+    } else if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
+        let mut desired = previous.to_vec();
+        if let Some(position) = desired.iter().position(|&index| index == clicked) {
+            if desired.len() > 1 {
+                desired.remove(position);
+            }
+        } else {
+            desired.push(clicked);
+        }
+        desired
+    } else {
+        vec![clicked]
+    };
+    desired.sort_unstable();
+    desired.dedup();
+    let anchor = if modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+        anchor.unwrap_or(clicked)
+    } else {
+        clicked
+    };
+    (desired, anchor)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunRowClickTarget {
+    Row,
+    Editable,
+    Control,
+    DragHandle,
+}
+
+fn run_row_click_target(
+    mut widget: Option<gtk::Widget>,
+    row: &gtk::ListBoxRow,
+) -> RunRowClickTarget {
+    let row: gtk::Widget = row.clone().upcast();
+    while let Some(current) = widget {
+        if current == row {
+            break;
+        }
+        if current.has_css_class("drag-handle") {
+            return RunRowClickTarget::DragHandle;
+        }
+        if current.is::<gtk::Entry>() {
+            return RunRowClickTarget::Editable;
+        }
+        if current.is::<gtk::Button>()
+            || current.is::<gtk::DropDown>()
+            || current.is::<gtk::Switch>()
+        {
+            return RunRowClickTarget::Control;
+        }
+        widget = current.parent();
+    }
+    RunRowClickTarget::Row
+}
+
+fn sync_run_row_selection(
+    list: &gtk::ListBox,
+    editor: &Rc<RefCell<Option<livesplit_core::RunEditor>>>,
+) {
+    let selected = list.selected_rows();
+    let Some((first, rest)) = selected.split_first() else {
+        return;
+    };
+    if let Some(editor) = editor.borrow_mut().as_mut() {
+        let state = editor.state(&mut ImageCache::new(), livesplit_core::Lang::English);
+        let select_row =
+            |editor: &mut livesplit_core::RunEditor, row: &gtk::ListBoxRow, additional: bool| {
+                let Some(row) = state.rows.get(row.index() as usize) else {
+                    return;
+                };
+                match row {
+                    livesplit_core::run::editor::RowState::Segment(segment) => {
+                        if additional {
+                            editor.select_additionally(segment.segment_index);
+                        } else {
+                            editor.select_only(segment.segment_index);
+                        }
+                    }
+                    livesplit_core::run::editor::RowState::SegmentGroup(group) => {
+                        if additional {
+                            let _ = editor.toggle_segment_group_selection(group.group_index);
+                        } else {
+                            let _ = editor.select_segment_group(group.group_index);
+                        }
+                    }
+                }
+            };
+        select_row(editor, first, false);
+        for row in rest {
+            select_row(editor, row, true);
+        }
+    }
+}
+
+fn apply_run_row_selection(
+    list: &gtk::ListBox,
+    editor: &Rc<RefCell<Option<livesplit_core::RunEditor>>>,
+    updating: &Cell<bool>,
+    desired: &[i32],
+) {
+    updating.set(true);
+    list.unselect_all();
+    for &index in desired {
+        if let Some(row) = list.row_at_index(index) {
+            list.select_row(Some(&row));
+        }
+    }
+    updating.set(false);
+    sync_run_row_selection(list, editor);
+}
+
 pub(super) fn build_run_editor(
     parent: &gtk::ApplicationWindow,
     editor: Rc<RefCell<Option<livesplit_core::RunEditor>>>,
@@ -573,18 +700,60 @@ pub(super) fn build_run_editor(
     segments.set_selection_mode(gtk::SelectionMode::Multiple);
     segments.add_css_class("boxed-list");
     populate_run_segments(&segments, &editor, &column_groups);
-    let selection_editor = editor.clone();
-    segments.connect_selected_rows_changed(move |list| {
-        let selected = list.selected_rows();
-        let Some((first, rest)) = selected.split_first() else {
+    let selection_updating = Rc::new(Cell::new(false));
+    let selection_anchor = Rc::new(Cell::new(None::<i32>));
+    let selection_gesture = gtk::GestureClick::new();
+    selection_gesture.set_button(1);
+    selection_gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let gesture_list = segments.clone();
+    let gesture_editor = editor.clone();
+    let gesture_updating = selection_updating.clone();
+    let gesture_anchor = selection_anchor.clone();
+    selection_gesture.connect_pressed(move |gesture, _, x, y| {
+        let Some(row) = gesture_list.row_at_y(y as i32) else {
             return;
         };
-        if let Some(editor) = selection_editor.borrow_mut().as_mut() {
-            editor.select_only(first.index() as usize);
-            for row in rest {
-                editor.select_additionally(row.index() as usize);
-            }
+        let target = run_row_click_target(gesture_list.pick(x, y, gtk::PickFlags::DEFAULT), &row);
+        if matches!(
+            target,
+            RunRowClickTarget::DragHandle | RunRowClickTarget::Control
+        ) {
+            return;
         }
+        let previous = gesture_list
+            .selected_rows()
+            .iter()
+            .map(gtk::ListBoxRow::index)
+            .collect::<Vec<_>>();
+        let (desired, anchor) = desired_run_row_selection(
+            &previous,
+            row.index(),
+            gesture.current_event_state(),
+            gesture_anchor.get(),
+        );
+        gesture_anchor.set(Some(anchor));
+
+        if target == RunRowClickTarget::Editable {
+            let list = gesture_list.clone();
+            let editor = gesture_editor.clone();
+            let updating = gesture_updating.clone();
+            glib::idle_add_local_once(move || {
+                apply_run_row_selection(&list, &editor, &updating, &desired);
+            });
+            return;
+        }
+
+        apply_run_row_selection(&gesture_list, &gesture_editor, &gesture_updating, &desired);
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+    });
+    segments.add_controller(selection_gesture);
+    let selection_editor = editor.clone();
+    let changed_updating = selection_updating.clone();
+    segments.connect_selected_rows_changed(move |list| {
+        if changed_updating.get() {
+            return;
+        }
+        sync_run_row_selection(list, &selection_editor);
     });
     let scroller = gtk::ScrolledWindow::builder()
         .vexpand(true)
@@ -619,12 +788,14 @@ pub(super) fn build_run_editor(
         button.set_label(if reveal { "History ▴" } else { "History ▾" });
     });
     command_rail.append(&history);
+    let mut segment_action_buttons = Vec::new();
     for (label, operation) in [
-        ("Insert Above", 0_u8),
-        ("Add Below", 1),
-        ("Remove", 2),
+        ("Add Split Above", 0_u8),
+        ("Add Split Below", 1),
+        ("Delete Splits", 2),
         ("Move Up", 3),
         ("Move Down", 4),
+        ("Group Selection", 5),
     ] {
         let button = gtk::Button::with_label(label);
         let button_editor = editor.clone();
@@ -637,13 +808,38 @@ pub(super) fn build_run_editor(
                     1 => editor.insert_segment_below(),
                     2 => editor.remove_segments(),
                     3 => editor.move_segments_up(),
-                    _ => editor.move_segments_down(),
+                    4 => editor.move_segments_down(),
+                    5 => {
+                        let _ = editor.create_segment_group_from_selection(Some("Group"));
+                    }
+                    _ => unreachable!(),
                 }
             }
             populate_run_segments(&button_list, &button_editor, &button_groups);
         });
         command_rail.append(&button);
+        segment_action_buttons.push(button);
     }
+    let action_editor = editor.clone();
+    let update_segment_actions = move || {
+        let editor = action_editor.borrow();
+        let Some(editor) = editor.as_ref() else {
+            return;
+        };
+        let state = editor.state(&mut ImageCache::new(), livesplit_core::Lang::English);
+        for (button, sensitive) in segment_action_buttons.iter().zip([
+            true,
+            true,
+            state.buttons.can_remove,
+            state.buttons.can_move_up,
+            state.buttons.can_move_down,
+            state.buttons.can_create_segment_group,
+        ]) {
+            button.set_sensitive(sensitive);
+        }
+    };
+    update_segment_actions();
+    segments.connect_selected_rows_changed(move |_| update_segment_actions());
     let comparisons_button = gtk::Button::with_label("Comparisons…");
     let comparison_pages = pages.clone();
     comparisons_button.connect_clicked(move |_| {
@@ -756,4 +952,37 @@ pub(super) fn build_run_editor(
         glib::Propagation::Proceed
     });
     window
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::desired_run_row_selection;
+    use gtk::gdk;
+
+    #[test]
+    fn plain_click_selects_only_the_clicked_row() {
+        let (selection, anchor) =
+            desired_run_row_selection(&[1, 2], 4, gdk::ModifierType::empty(), Some(1));
+        assert_eq!(selection, [4]);
+        assert_eq!(anchor, 4);
+    }
+
+    #[test]
+    fn control_click_toggles_without_allowing_an_empty_selection() {
+        let (selection, _) =
+            desired_run_row_selection(&[1, 3], 1, gdk::ModifierType::CONTROL_MASK, Some(3));
+        assert_eq!(selection, [3]);
+
+        let (selection, _) =
+            desired_run_row_selection(&[3], 3, gdk::ModifierType::CONTROL_MASK, Some(3));
+        assert_eq!(selection, [3]);
+    }
+
+    #[test]
+    fn shift_click_selects_the_range_from_the_anchor() {
+        let (selection, anchor) =
+            desired_run_row_selection(&[2], 5, gdk::ModifierType::SHIFT_MASK, Some(2));
+        assert_eq!(selection, [2, 3, 4, 5]);
+        assert_eq!(anchor, 2);
+    }
 }
