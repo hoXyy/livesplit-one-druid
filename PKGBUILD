@@ -6,7 +6,7 @@ pkgver=0.7.2.r142.g86f2402
 pkgrel=1
 pkgdesc="Linux desktop version of LiveSplit One using GTK4 and libadwaita"
 arch=('x86_64')
-url="https://github.com/hoXyy/livesplit-one-druid"
+url="https://github.com/hoXyy/livesplit-one-gtk"
 license=('MIT')
 depends=(
   'cairo'
@@ -23,7 +23,7 @@ provides=('livesplit-one')
 # GCC LTO objects produced by native Rust dependencies (such as mimalloc,
 # ring, and wasmtime) cannot be consumed by Cargo's final LLD link.
 options=('!lto')
-source=("${_pkgname}::git+https://github.com/hoXyy/livesplit-one-druid.git")
+source=("${_pkgname}::git+https://github.com/hoXyy/livesplit-one-gtk.git")
 sha256sums=('SKIP')
 
 pkgver() {
