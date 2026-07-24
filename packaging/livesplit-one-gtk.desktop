@@ -4,6 +4,6 @@ Name=LiveSplit One (GTK)
 Comment=A LiveSplit One timer for Linux (GTK)
 Exec=livesplit-one-gtk
 Icon=livesplit-one-gtk
-Categories=Game;Utility;
+Categories=Game;
 Terminal=false
 StartupWMClass=org.livesplit.LiveSplitOne
