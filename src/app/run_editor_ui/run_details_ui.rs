@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn open_icon_file(
-    button: &gtk::Button,
+    button: &impl IsA<gtk::Widget>,
     selected: impl Fn(livesplit_core::settings::Image) + 'static,
 ) {
     let Some(window) = button.root().and_downcast::<gtk::Window>() else {
@@ -29,6 +29,124 @@ pub(super) fn open_icon_file(
             selected(image);
         }
     });
+}
+
+pub(super) type IconChanged = Rc<dyn Fn(livesplit_core::settings::Image)>;
+pub(super) type IconRemoved = Rc<dyn Fn()>;
+pub(super) type IconActionAvailable = Rc<dyn Fn() -> bool>;
+
+pub(super) fn build_icon_picker(
+    data: &[u8],
+    pixel_size: i32,
+    size: i32,
+    choose: IconChanged,
+    remove: IconRemoved,
+    apply_to_selected: Option<(IconChanged, IconActionAvailable)>,
+) -> gtk::MenuButton {
+    let preview = gtk::Image::new();
+    preview.set_pixel_size(pixel_size);
+    preview.set_size_request(size, size);
+    set_icon_preview(&preview, data);
+
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&preview));
+    let indicator = gtk::Image::from_icon_name("pan-down-symbolic");
+    indicator.set_halign(gtk::Align::End);
+    indicator.set_valign(gtk::Align::End);
+    indicator.set_margin_end(2);
+    indicator.set_margin_bottom(2);
+    indicator.add_css_class("dim-label");
+    overlay.add_overlay(&indicator);
+
+    let picker = gtk::MenuButton::new();
+    picker.add_css_class("flat");
+    picker.set_child(Some(&overlay));
+    picker.set_tooltip_text(Some(
+        "Click for icon options; double-click to choose an image",
+    ));
+
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    menu.set_margin_start(6);
+    menu.set_margin_end(6);
+    menu.set_margin_top(6);
+    menu.set_margin_bottom(6);
+    let remove_button = gtk::Button::with_label("Remove Icon");
+    remove_button.add_css_class("flat");
+    remove_button.set_sensitive(!data.is_empty());
+    let choose_button = gtk::Button::with_label("Choose Image…");
+    choose_button.add_css_class("flat");
+    let choose_picker = picker.clone();
+    let choose_preview = preview.clone();
+    let choose_changed = choose.clone();
+    let choose_remove = remove_button.clone();
+    choose_button.connect_clicked(move |_| {
+        choose_picker.popdown();
+        let preview = choose_preview.clone();
+        let changed = choose_changed.clone();
+        let remove = choose_remove.clone();
+        open_icon_file(&choose_picker, move |image| {
+            set_icon_preview(&preview, image.data());
+            remove.set_sensitive(true);
+            changed(image);
+        });
+    });
+    menu.append(&choose_button);
+
+    if let Some((apply, available)) = apply_to_selected {
+        let apply_button = gtk::Button::with_label("Choose for Selected Splits…");
+        apply_button.add_css_class("flat");
+        apply_button.set_visible(available());
+        let apply_picker = picker.clone();
+        apply_button.connect_clicked(move |_| {
+            apply_picker.popdown();
+            let apply = apply.clone();
+            open_icon_file(&apply_picker, move |image| apply(image));
+        });
+        let visible_button = apply_button.clone();
+        picker.connect_active_notify(move |picker| {
+            if picker.is_active() {
+                visible_button.set_visible(available());
+            }
+        });
+        menu.append(&apply_button);
+    }
+
+    let remove_picker = picker.clone();
+    let remove_preview = preview.clone();
+    remove_button.connect_clicked(move |button| {
+        remove_picker.popdown();
+        remove();
+        set_icon_preview(&remove_preview, &[]);
+        button.set_sensitive(false);
+    });
+    menu.append(&remove_button);
+
+    let popover = gtk::Popover::new();
+    popover.set_child(Some(&menu));
+    picker.set_popover(Some(&popover));
+
+    let double_click = gtk::GestureClick::new();
+    double_click.set_button(1);
+    let double_picker = picker.clone();
+    let double_preview = preview;
+    let double_remove = remove_button;
+    double_click.connect_released(move |gesture, presses, _, _| {
+        if presses != 2 {
+            return;
+        }
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        double_picker.popdown();
+        let preview = double_preview.clone();
+        let changed = choose.clone();
+        let remove = double_remove.clone();
+        open_icon_file(&double_picker, move |image| {
+            set_icon_preview(&preview, image.data());
+            remove.set_sensitive(true);
+            changed(image);
+        });
+    });
+    overlay.add_controller(double_click);
+    picker
 }
 
 pub(super) fn set_icon_preview(preview: &gtk::Image, data: &[u8]) {

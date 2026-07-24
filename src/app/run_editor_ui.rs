@@ -8,8 +8,8 @@ mod run_segments;
 #[cfg(feature = "auto-splitting")]
 use autosplitter_ui::build_run_auto_splitter_section;
 use run_details_ui::{
-    build_run_comparisons_page, build_run_details_page, install_run_tool_actions, open_icon_file,
-    populate_speedrun_com_variable_rows, run_tools_menu, set_icon_preview,
+    build_icon_picker, build_run_comparisons_page, build_run_details_page,
+    install_run_tool_actions, populate_speedrun_com_variable_rows, run_tools_menu,
 };
 use run_segments::populate_run_segments;
 
@@ -578,48 +578,36 @@ pub(super) fn build_run_editor(
     general.add(&attempts);
     let game_icon = gtk::Box::new(gtk::Orientation::Vertical, 6);
     game_icon.set_halign(gtk::Align::Center);
-    let game_icon_preview = gtk::Image::new();
-    game_icon_preview.set_pixel_size(96);
-    game_icon_preview.set_size_request(112, 112);
-    game_icon_preview.add_css_class("icon-dropshadow");
-    if let Some(editor) = editor.borrow().as_ref() {
-        set_icon_preview(&game_icon_preview, editor.run().game_icon().data());
-    }
+    let game_icon_data = editor
+        .borrow()
+        .as_ref()
+        .map(|editor| editor.run().game_icon().data().to_vec())
+        .unwrap_or_default();
+    let choose_game_editor = editor.clone();
+    let remove_game_editor = editor.clone();
+    let game_icon_picker = build_icon_picker(
+        &game_icon_data,
+        96,
+        112,
+        Rc::new(move |image| {
+            if let Some(editor) = choose_game_editor.borrow_mut().as_mut() {
+                editor.set_game_icon(image);
+            }
+        }),
+        Rc::new(move || {
+            if let Some(editor) = remove_game_editor.borrow_mut().as_mut() {
+                editor.remove_game_icon();
+            }
+        }),
+        None,
+    );
     let game_icon_frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
     game_icon_frame.add_css_class("card");
     game_icon_frame.set_size_request(112, 112);
     game_icon_frame.set_halign(gtk::Align::Center);
     game_icon_frame.set_valign(gtk::Align::Start);
-    game_icon_frame.append(&game_icon_preview);
+    game_icon_frame.append(&game_icon_picker);
     game_icon.append(&game_icon_frame);
-    let game_icon_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    game_icon_actions.set_halign(gtk::Align::Center);
-    let choose_game_icon = gtk::Button::with_label("Choose…");
-    let game_icon_editor = editor.clone();
-    let selected_game_preview = game_icon_preview.clone();
-    choose_game_icon.connect_clicked(move |button| {
-        let icon_editor = game_icon_editor.clone();
-        let preview = selected_game_preview.clone();
-        open_icon_file(button, move |image| {
-            set_icon_preview(&preview, image.data());
-            if let Some(editor) = icon_editor.borrow_mut().as_mut() {
-                editor.set_game_icon(image);
-            }
-        });
-    });
-    game_icon_actions.append(&choose_game_icon);
-    let remove_game_icon = gtk::Button::from_icon_name("edit-delete-symbolic");
-    remove_game_icon.set_tooltip_text(Some("Remove game icon"));
-    let remove_icon_editor = editor.clone();
-    let removed_game_preview = game_icon_preview.clone();
-    remove_game_icon.connect_clicked(move |_| {
-        if let Some(editor) = remove_icon_editor.borrow_mut().as_mut() {
-            editor.remove_game_icon();
-        }
-        set_icon_preview(&removed_game_preview, &[]);
-    });
-    game_icon_actions.append(&remove_game_icon);
-    game_icon.append(&game_icon_actions);
     let run_header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     run_header.append(&game_icon);
     run_header.append(&general);

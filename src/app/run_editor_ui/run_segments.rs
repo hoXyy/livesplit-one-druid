@@ -16,6 +16,51 @@ fn active_segment_index(editor: &livesplit_core::RunEditor) -> usize {
         .unwrap_or(0)
 }
 
+fn selected_segment_indices(editor: &livesplit_core::RunEditor) -> Vec<usize> {
+    editor
+        .state(&mut ImageCache::new(), livesplit_core::Lang::English)
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            livesplit_core::run::editor::RowState::Segment(segment)
+                if segment.selected.is_selected_or_active() =>
+            {
+                Some(segment.segment_index)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn restore_segment_selection(editor: &mut livesplit_core::RunEditor, selected: &[usize]) {
+    if let Some((&first, rest)) = selected.split_first() {
+        editor.select_only(first);
+        for &index in rest {
+            editor.select_additionally(index);
+        }
+    }
+}
+
+fn set_segment_icons(
+    editor: &mut livesplit_core::RunEditor,
+    indices: &[usize],
+    image: &livesplit_core::settings::Image,
+) {
+    let selected = selected_segment_indices(editor);
+    for &index in indices {
+        editor.select_only(index);
+        editor.active_segment().set_icon(image.clone());
+    }
+    restore_segment_selection(editor, &selected);
+}
+
+fn remove_segment_icon(editor: &mut livesplit_core::RunEditor, index: usize) {
+    let selected = selected_segment_indices(editor);
+    editor.select_only(index);
+    editor.active_segment().remove_icon();
+    restore_segment_selection(editor, &selected);
+}
+
 fn move_selected_segment_to(editor: &mut livesplit_core::RunEditor, target: usize) {
     let limit = editor.run().len().saturating_mul(2);
     for _ in 0..limit {
@@ -143,41 +188,45 @@ pub(super) fn populate_run_segments(
         )));
         drag_handle.add_controller(drag_source);
         icon_box.append(&drag_handle);
-        let icon_preview = gtk::Image::new();
-        icon_preview.set_pixel_size(32);
-        icon_preview.set_size_request(36, 36);
-        if let Some(editor) = editor.borrow().as_ref() {
-            set_icon_preview(&icon_preview, editor.run().segment(index).icon().data());
-        }
-        icon_box.append(&icon_preview);
-        let choose_icon = gtk::Button::from_icon_name("image-x-generic-symbolic");
-        choose_icon.set_tooltip_text(Some("Choose segment icon"));
+        let icon_data = editor
+            .borrow()
+            .as_ref()
+            .map(|editor| editor.run().segment(index).icon().data().to_vec())
+            .unwrap_or_default();
         let choose_editor = editor.clone();
-        let selected_preview = icon_preview.clone();
-        choose_icon.connect_clicked(move |button| {
-            let icon_editor = choose_editor.clone();
-            let preview = selected_preview.clone();
-            open_icon_file(button, move |image| {
-                set_icon_preview(&preview, image.data());
-                if let Some(editor) = icon_editor.borrow_mut().as_mut() {
-                    editor.select_only(index);
-                    editor.active_segment().set_icon(image);
-                }
-            });
-        });
-        icon_box.append(&choose_icon);
-        let remove_icon = gtk::Button::from_icon_name("edit-delete-symbolic");
-        remove_icon.set_tooltip_text(Some("Remove segment icon"));
         let remove_editor = editor.clone();
-        let removed_preview = icon_preview.clone();
-        remove_icon.connect_clicked(move |_| {
-            if let Some(editor) = remove_editor.borrow_mut().as_mut() {
-                editor.select_only(index);
-                editor.active_segment().remove_icon();
-            }
-            set_icon_preview(&removed_preview, &[]);
-        });
-        icon_box.append(&remove_icon);
+        let selected_editor = editor.clone();
+        let available_editor = editor.clone();
+        let icon_picker = build_icon_picker(
+            &icon_data,
+            32,
+            36,
+            Rc::new(move |image| {
+                if let Some(editor) = choose_editor.borrow_mut().as_mut() {
+                    set_segment_icons(editor, &[index], &image);
+                }
+            }),
+            Rc::new(move || {
+                if let Some(editor) = remove_editor.borrow_mut().as_mut() {
+                    remove_segment_icon(editor, index);
+                }
+            }),
+            Some((
+                Rc::new(move |image| {
+                    if let Some(editor) = selected_editor.borrow_mut().as_mut() {
+                        let selected = selected_segment_indices(editor);
+                        set_segment_icons(editor, &selected, &image);
+                    }
+                }),
+                Rc::new(move || {
+                    available_editor
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|editor| selected_segment_indices(editor).len() > 1)
+                }),
+            )),
+        );
+        icon_box.append(&icon_picker);
         if let Some(group) = column_groups.first() {
             group.add_widget(&icon_box);
         }
@@ -348,19 +397,35 @@ fn segment_group_row(
     });
     content.append(&collapse);
 
-    let icon_preview = gtk::Image::new();
-    icon_preview.set_pixel_size(24);
-    icon_preview.set_size_request(28, 28);
-    if group.has_explicit_icon {
-        let editor = editor.borrow();
-        if let Some(editor) = editor.as_ref() {
-            let group = &editor.run().segment_groups().groups()[group.group_index];
-            if let Some(icon) = group.icon() {
-                set_icon_preview(&icon_preview, icon.data());
+    let icon_data = editor
+        .borrow()
+        .as_ref()
+        .and_then(|editor| {
+            editor.run().segment_groups().groups()[group.group_index]
+                .icon()
+                .map(|icon| icon.data().to_vec())
+        })
+        .unwrap_or_default();
+    let group_index = group.group_index;
+    let choose_editor = editor.clone();
+    let remove_editor = editor.clone();
+    let icon_picker = build_icon_picker(
+        &icon_data,
+        24,
+        28,
+        Rc::new(move |image| {
+            if let Some(editor) = choose_editor.borrow_mut().as_mut() {
+                let _ = editor.set_segment_group_icon(group_index, image);
             }
-        }
-    }
-    content.append(&icon_preview);
+        }),
+        Rc::new(move || {
+            if let Some(editor) = remove_editor.borrow_mut().as_mut() {
+                let _ = editor.remove_segment_group_icon(group_index);
+            }
+        }),
+        None,
+    );
+    content.append(&icon_picker);
 
     let name = gtk::Entry::builder()
         .text(group.explicit_name.as_deref().unwrap_or_default())
@@ -371,7 +436,6 @@ fn segment_group_row(
         "Segment group name; leave empty to use the final segment's name",
     ));
     let name_editor = editor.clone();
-    let group_index = group.group_index;
     name.connect_changed(move |entry| {
         if let Some(editor) = name_editor.borrow_mut().as_mut() {
             let text = entry.text();
@@ -380,34 +444,6 @@ fn segment_group_row(
         }
     });
     content.append(&name);
-
-    let choose_icon = gtk::Button::from_icon_name("image-x-generic-symbolic");
-    choose_icon.set_tooltip_text(Some("Choose group icon"));
-    let choose_editor = editor.clone();
-    let choose_preview = icon_preview.clone();
-    choose_icon.connect_clicked(move |button| {
-        let editor = choose_editor.clone();
-        let preview = choose_preview.clone();
-        open_icon_file(button, move |image| {
-            set_icon_preview(&preview, image.data());
-            if let Some(editor) = editor.borrow_mut().as_mut() {
-                let _ = editor.set_segment_group_icon(group_index, image);
-            }
-        });
-    });
-    content.append(&choose_icon);
-
-    let remove_icon = gtk::Button::from_icon_name("edit-delete-symbolic");
-    remove_icon.set_tooltip_text(Some("Remove group icon"));
-    let remove_editor = editor.clone();
-    let remove_preview = icon_preview.clone();
-    remove_icon.connect_clicked(move |_| {
-        if let Some(editor) = remove_editor.borrow_mut().as_mut() {
-            let _ = editor.remove_segment_group_icon(group_index);
-        }
-        set_icon_preview(&remove_preview, &[]);
-    });
-    content.append(&remove_icon);
 
     let add = gtk::Button::from_icon_name("list-add-symbolic");
     add.set_tooltip_text(Some("Add a split inside this group"));
@@ -468,7 +504,10 @@ fn segment_group_row(
 
 #[cfg(test)]
 mod tests {
-    use super::{insert_segment_into_group, move_segment_into_group, move_selected_segment_to};
+    use super::{
+        insert_segment_into_group, move_segment_into_group, move_selected_segment_to,
+        selected_segment_indices, set_segment_icons,
+    };
     use livesplit_core::{Run, RunEditor, Segment};
 
     fn editor_with_group() -> RunEditor {
@@ -524,5 +563,23 @@ mod tests {
         assert_eq!(group.name(), Some("Chapter"));
         assert_eq!(editor.run().segment(0).name(), "");
         assert_eq!(editor.run().segment(1).name(), "Only");
+    }
+
+    #[test]
+    fn applying_an_icon_to_selected_splits_preserves_the_selection() {
+        let mut editor = editor_with_group();
+        editor.select_only(1);
+        editor.select_additionally(2);
+        let selected = selected_segment_indices(&editor);
+        let image = livesplit_core::settings::Image::new(
+            (&b"test icon"[..]).into(),
+            livesplit_core::settings::Image::ICON,
+        );
+
+        set_segment_icons(&mut editor, &selected, &image);
+
+        assert_eq!(editor.run().segment(1).icon(), &image);
+        assert_eq!(editor.run().segment(2).icon(), &image);
+        assert_eq!(selected_segment_indices(&editor), [1, 2]);
     }
 }
