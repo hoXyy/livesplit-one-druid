@@ -219,6 +219,7 @@ pub fn build_setting_row(field: &Field, changed: SettingChanged) -> adw::Prefere
             let expander = adw::ExpanderRow::builder()
                 .title(field.text.as_ref())
                 .subtitle(field.tooltip.as_ref())
+                .show_enable_switch(true)
                 .enable_expansion(font.is_some())
                 .expanded(font.is_some())
                 .build();
@@ -234,141 +235,97 @@ pub fn build_setting_row(field: &Field, changed: SettingChanged) -> adw::Prefere
                     enabled_changed(Value::Font(None));
                 }
             });
-            let family = adw::EntryRow::builder()
-                .title("Family")
-                .text(font.as_ref().map_or("", |font| &font.family))
+            let family_row = adw::ActionRow::builder()
+                .title("Font")
+                .subtitle("Choose an installed family and one of its available faces")
+                .build();
+            let mut font_description = gtk::pango::FontDescription::new();
+            if let Some(font) = font {
+                font_description.set_family(&font.family);
+                font_description.set_style(match font.style {
+                    FontStyle::Normal => gtk::pango::Style::Normal,
+                    FontStyle::Italic => gtk::pango::Style::Italic,
+                    FontStyle::Oblique => gtk::pango::Style::Oblique,
+                });
+                font_description.set_weight(match font.weight {
+                    FontWeight::Thin => gtk::pango::Weight::Thin,
+                    FontWeight::ExtraLight => gtk::pango::Weight::Ultralight,
+                    FontWeight::Light => gtk::pango::Weight::Light,
+                    FontWeight::SemiLight => gtk::pango::Weight::Semilight,
+                    FontWeight::Normal => gtk::pango::Weight::Normal,
+                    FontWeight::Medium => gtk::pango::Weight::Medium,
+                    FontWeight::SemiBold => gtk::pango::Weight::Semibold,
+                    FontWeight::Bold => gtk::pango::Weight::Bold,
+                    FontWeight::ExtraBold => gtk::pango::Weight::Ultrabold,
+                    FontWeight::Black => gtk::pango::Weight::Heavy,
+                    FontWeight::ExtraBlack => gtk::pango::Weight::Ultraheavy,
+                });
+                font_description.set_stretch(match font.stretch {
+                    FontStretch::UltraCondensed => gtk::pango::Stretch::UltraCondensed,
+                    FontStretch::ExtraCondensed => gtk::pango::Stretch::ExtraCondensed,
+                    FontStretch::Condensed => gtk::pango::Stretch::Condensed,
+                    FontStretch::SemiCondensed => gtk::pango::Stretch::SemiCondensed,
+                    FontStretch::Normal => gtk::pango::Stretch::Normal,
+                    FontStretch::SemiExpanded => gtk::pango::Stretch::SemiExpanded,
+                    FontStretch::Expanded => gtk::pango::Stretch::Expanded,
+                    FontStretch::ExtraExpanded => gtk::pango::Stretch::ExtraExpanded,
+                    FontStretch::UltraExpanded => gtk::pango::Stretch::UltraExpanded,
+                });
+            }
+            let font_dialog = gtk::FontDialog::builder().title("Choose Font").build();
+            let family = gtk::FontDialogButton::builder()
+                .dialog(&font_dialog)
+                .font_desc(&font_description)
+                .level(gtk::FontLevel::Face)
+                .use_font(true)
+                .valign(gtk::Align::Center)
                 .build();
             let family_current = current.clone();
             let family_changed = changed.clone();
-            family.connect_changed(move |row| {
+            family.connect_font_desc_notify(move |button| {
+                let Some(description) = button.font_desc() else {
+                    return;
+                };
+                let Some(family) = description.family() else {
+                    return;
+                };
                 let mut current = family_current.borrow_mut();
                 let font = current.get_or_insert_with(Font::default);
-                font.family = row.text().into();
+                font.family = family.into();
+                font.style = match description.style() {
+                    gtk::pango::Style::Italic => FontStyle::Italic,
+                    gtk::pango::Style::Oblique => FontStyle::Oblique,
+                    _ => FontStyle::Normal,
+                };
+                font.weight = match description.weight() {
+                    gtk::pango::Weight::Thin => FontWeight::Thin,
+                    gtk::pango::Weight::Ultralight => FontWeight::ExtraLight,
+                    gtk::pango::Weight::Light => FontWeight::Light,
+                    gtk::pango::Weight::Semilight => FontWeight::SemiLight,
+                    gtk::pango::Weight::Medium => FontWeight::Medium,
+                    gtk::pango::Weight::Semibold => FontWeight::SemiBold,
+                    gtk::pango::Weight::Bold => FontWeight::Bold,
+                    gtk::pango::Weight::Ultrabold => FontWeight::ExtraBold,
+                    gtk::pango::Weight::Heavy => FontWeight::Black,
+                    gtk::pango::Weight::Ultraheavy => FontWeight::ExtraBlack,
+                    _ => FontWeight::Normal,
+                };
+                font.stretch = match description.stretch() {
+                    gtk::pango::Stretch::UltraCondensed => FontStretch::UltraCondensed,
+                    gtk::pango::Stretch::ExtraCondensed => FontStretch::ExtraCondensed,
+                    gtk::pango::Stretch::Condensed => FontStretch::Condensed,
+                    gtk::pango::Stretch::SemiCondensed => FontStretch::SemiCondensed,
+                    gtk::pango::Stretch::SemiExpanded => FontStretch::SemiExpanded,
+                    gtk::pango::Stretch::Expanded => FontStretch::Expanded,
+                    gtk::pango::Stretch::ExtraExpanded => FontStretch::ExtraExpanded,
+                    gtk::pango::Stretch::UltraExpanded => FontStretch::UltraExpanded,
+                    _ => FontStretch::Normal,
+                };
                 family_changed(Value::Font(Some(font.clone())));
             });
-            expander.add_row(&family);
-            let style_field = Field::new(
-                "Style".into(),
-                "Preferred font style".into(),
-                Value::Bool(false),
-            );
-            let style_current = current.clone();
-            let style_changed = changed.clone();
-            let style = enum_row(
-                &style_field,
-                &["Normal", "Italic", "Oblique"],
-                match font.as_ref().map_or(FontStyle::Normal, |font| font.style) {
-                    FontStyle::Normal => 0,
-                    FontStyle::Italic => 1,
-                    FontStyle::Oblique => 2,
-                },
-                style_changed,
-                move |index| {
-                    let mut current = style_current.borrow_mut();
-                    let font = current.get_or_insert_with(Font::default);
-                    font.style = match index {
-                        1 => FontStyle::Italic,
-                        2 => FontStyle::Oblique,
-                        _ => FontStyle::Normal,
-                    };
-                    Value::Font(Some(font.clone()))
-                },
-            );
-            expander.add_row(&style);
-            let weight_field = Field::new(
-                "Weight".into(),
-                "Preferred font weight".into(),
-                Value::Bool(false),
-            );
-            let weights = [
-                FontWeight::Thin,
-                FontWeight::ExtraLight,
-                FontWeight::Light,
-                FontWeight::SemiLight,
-                FontWeight::Normal,
-                FontWeight::Medium,
-                FontWeight::SemiBold,
-                FontWeight::Bold,
-                FontWeight::ExtraBold,
-                FontWeight::Black,
-                FontWeight::ExtraBlack,
-            ];
-            let current_weight = font.as_ref().map_or(FontWeight::Normal, |font| font.weight);
-            let weight_current = current.clone();
-            let weight = enum_row(
-                &weight_field,
-                &[
-                    "Thin",
-                    "Extra Light",
-                    "Light",
-                    "Semi Light",
-                    "Normal",
-                    "Medium",
-                    "Semi Bold",
-                    "Bold",
-                    "Extra Bold",
-                    "Black",
-                    "Extra Black",
-                ],
-                weights
-                    .iter()
-                    .position(|weight| *weight == current_weight)
-                    .unwrap_or(4) as u32,
-                changed.clone(),
-                move |index| {
-                    let mut current = weight_current.borrow_mut();
-                    let font = current.get_or_insert_with(Font::default);
-                    font.weight = weights[index as usize];
-                    Value::Font(Some(font.clone()))
-                },
-            );
-            expander.add_row(&weight);
-            let stretch_field = Field::new(
-                "Stretch".into(),
-                "Preferred font width".into(),
-                Value::Bool(false),
-            );
-            let stretches = [
-                FontStretch::UltraCondensed,
-                FontStretch::ExtraCondensed,
-                FontStretch::Condensed,
-                FontStretch::SemiCondensed,
-                FontStretch::Normal,
-                FontStretch::SemiExpanded,
-                FontStretch::Expanded,
-                FontStretch::ExtraExpanded,
-                FontStretch::UltraExpanded,
-            ];
-            let current_stretch = font
-                .as_ref()
-                .map_or(FontStretch::Normal, |font| font.stretch);
-            let stretch_current = current.clone();
-            let stretch = enum_row(
-                &stretch_field,
-                &[
-                    "Ultra Condensed",
-                    "Extra Condensed",
-                    "Condensed",
-                    "Semi Condensed",
-                    "Normal",
-                    "Semi Expanded",
-                    "Expanded",
-                    "Extra Expanded",
-                    "Ultra Expanded",
-                ],
-                stretches
-                    .iter()
-                    .position(|stretch| *stretch == current_stretch)
-                    .unwrap_or(4) as u32,
-                changed,
-                move |index| {
-                    let mut current = stretch_current.borrow_mut();
-                    let font = current.get_or_insert_with(Font::default);
-                    font.stretch = stretches[index as usize];
-                    Value::Font(Some(font.clone()))
-                },
-            );
-            expander.add_row(&stretch);
+            family_row.add_suffix(&family);
+            family_row.set_activatable_widget(Some(&family));
+            expander.add_row(&family_row);
             expander.upcast()
         }
         Value::Color(color) => color_row(field, *color, changed),
