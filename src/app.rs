@@ -340,7 +340,15 @@ impl SimpleComponent for AppModel {
                 });
             }
             AppMsg::Scroll(delta) => {
-                scroll_layout(&self.layout, delta);
+                let has_segment_groups = !self
+                    .timer
+                    .read()
+                    .unwrap()
+                    .run()
+                    .segment_groups()
+                    .groups()
+                    .is_empty();
+                scroll_layout(&self.layout, delta, has_segment_groups);
             }
             AppMsg::SetComparison(comparison) => {
                 if self
@@ -553,12 +561,33 @@ impl SimpleComponent for AppModel {
     }
 }
 
-fn scroll_layout(layout_data: &RefCell<LayoutData>, delta: f64) {
+fn scroll_layout(layout_data: &RefCell<LayoutData>, delta: f64, has_segment_groups: bool) {
     let mut layout_data = layout_data.borrow_mut();
+    if !has_segment_groups {
+        enable_flat_scrolling(&mut layout_data.layout.components);
+    }
     if delta > 0.0 {
         layout_data.layout.scroll_down();
     } else if delta < 0.0 {
         layout_data.layout.scroll_up();
+    }
+}
+
+fn enable_flat_scrolling(components: &mut [livesplit_core::layout::Component]) {
+    use livesplit_core::{component::splits::SubsplitDisplayMode, layout::Component};
+
+    for component in components {
+        match component {
+            Component::Splits(splits)
+                if splits.settings().subsplit_display_mode
+                    == SubsplitDisplayMode::CurrentGroupExpanded =>
+            {
+                splits.settings_mut().subsplit_display_mode = SubsplitDisplayMode::Flat;
+            }
+            Component::Group(group) => enable_flat_scrolling(&mut group.components),
+            Component::Carousel(carousel) => enable_flat_scrolling(&mut carousel.components),
+            _ => {}
+        }
     }
 }
 
@@ -989,9 +1018,37 @@ mod tests {
             is_modified: false,
         });
 
-        scroll_layout(&layout, 1.0);
+        scroll_layout(&layout, 1.0, false);
 
         assert!(layout.try_borrow_mut().is_ok());
+    }
+
+    #[test]
+    fn scrolling_ungrouped_runs_uses_flat_split_scrolling() {
+        use livesplit_core::{component::splits::SubsplitDisplayMode, layout::Component};
+
+        let layout = RefCell::new(LayoutData {
+            layout: livesplit_core::Layout::default_layout(livesplit_core::Lang::English),
+            layout_state: Default::default(),
+            is_modified: false,
+        });
+
+        scroll_layout(&layout, 1.0, false);
+
+        let layout = layout.borrow();
+        let splits = layout
+            .layout
+            .components
+            .iter()
+            .find_map(|component| match component {
+                Component::Splits(splits) => Some(splits),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            splits.settings().subsplit_display_mode,
+            SubsplitDisplayMode::Flat
+        );
     }
 
     #[test]

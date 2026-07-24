@@ -28,6 +28,47 @@ pub fn build_setting_row(field: &Field, changed: SettingChanged) -> adw::Prefere
             row.connect_value_notify(move |row| changed(Value::UInt(row.value().round() as u64)));
             row.upcast()
         }
+        Value::OptionalUInt(value) => {
+            let adjustment = gtk::Adjustment::new(
+                value.unwrap_or_default() as f64,
+                0.0,
+                u32::MAX as f64,
+                1.0,
+                10.0,
+                0.0,
+            );
+            let row = adw::SpinRow::builder()
+                .title(field.text.as_ref())
+                .subtitle(field.tooltip.as_ref())
+                .adjustment(&adjustment)
+                .numeric(true)
+                .build();
+            let enabled = Rc::new(Cell::new(value.is_some()));
+            row.set_sensitive(enabled.get());
+            let toggle = gtk::Switch::builder()
+                .active(enabled.get())
+                .valign(gtk::Align::Center)
+                .build();
+            row.add_suffix(&toggle);
+            let value_enabled = enabled.clone();
+            let value_changed = changed.clone();
+            row.connect_value_notify(move |row| {
+                if value_enabled.get() {
+                    value_changed(Value::OptionalUInt(Some(row.value().round() as u64)));
+                }
+            });
+            let toggle_row = row.clone();
+            toggle.connect_active_notify(move |toggle| {
+                enabled.set(toggle.is_active());
+                toggle_row.set_sensitive(toggle.is_active());
+                changed(Value::OptionalUInt(
+                    toggle
+                        .is_active()
+                        .then(|| toggle_row.value().round() as u64),
+                ));
+            });
+            row.upcast()
+        }
         Value::Int(value) => {
             let adjustment = gtk::Adjustment::new(
                 *value as f64,
@@ -532,6 +573,26 @@ pub fn build_setting_row(field: &Field, changed: SettingChanged) -> adw::Prefere
                         0 => OnStartingSegment,
                         2 => OnEndingSegment,
                         _ => Contextual,
+                    })
+                },
+            )
+        }
+        Value::SubsplitDisplayMode(value) => {
+            use livesplit_core::component::splits::SubsplitDisplayMode::*;
+            enum_row(
+                field,
+                &["Flat", "Current Group Expanded", "All Groups Expanded"],
+                match value {
+                    Flat => 0,
+                    CurrentGroupExpanded => 1,
+                    AllGroupsExpanded => 2,
+                },
+                changed,
+                |index| {
+                    Value::SubsplitDisplayMode(match index {
+                        0 => Flat,
+                        2 => AllGroupsExpanded,
+                        _ => CurrentGroupExpanded,
                     })
                 },
             )

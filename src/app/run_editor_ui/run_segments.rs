@@ -13,7 +13,11 @@ pub(super) fn populate_run_segments(
         .as_ref()
         .unwrap()
         .state(&mut ImageCache::new(), livesplit_core::Lang::English);
-    for (index, segment) in state.segments.iter().enumerate() {
+    for segment in state.rows.iter().filter_map(|row| match row {
+        livesplit_core::run::editor::RowState::Segment(segment) => Some(segment),
+        livesplit_core::run::editor::RowState::SegmentGroup(_) => None,
+    }) {
+        let index = segment.segment_index;
         let row = gtk::ListBoxRow::new();
         let grid = gtk::Grid::builder()
             .column_spacing(8)
