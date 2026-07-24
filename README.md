@@ -1,8 +1,7 @@
 # LiveSplit One GTK
 
 A Linux desktop version of LiveSplit One built with Relm4, GTK 4, libadwaita,
-and [livesplit-core]. The installed package is `livesplit-one-gtk`; the
-executable remains `livesplit-one`.
+and [livesplit-core].
 
 ## Requirements
 
@@ -24,19 +23,20 @@ transparent toplevel: movement and resizing are handled by the compositor,
 exact placement and always-on-top are unavailable, and stored placement is
 preserved rather than overwritten.
 
-## Configuration compatibility
+## Configuration location
 
-Existing configuration, splits, layouts, notes, hotkeys, history, and
-autosplitter associations are retained. The configuration remains at:
+Configuration is stored here:
 
 ```text
 ~/.local/share/livesplitone/config.yml
 ```
 
-Autosplitters that read another process's memory may require `CAP_SYS_PTRACE`:
+# Note about autosplitters
+
+Autosplitters may require `CAP_SYS_PTRACE` to be able to read other processes's memory:
 
 ```bash
-sudo setcap CAP_SYS_PTRACE=+eip /usr/bin/livesplit-one
+sudo setcap CAP_SYS_PTRACE=+eip /usr/bin/livesplit-one-gtk
 ```
 
 The web version is available at [one.livesplit.org].
