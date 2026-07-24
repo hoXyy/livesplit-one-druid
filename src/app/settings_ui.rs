@@ -146,7 +146,6 @@ fn open_hotkey_capture(
         .default_height(260)
         .build();
     let status = adw::StatusPage::builder()
-        .icon_name("preferences-desktop-keyboard-shortcuts-symbolic")
         .title("Press a key combination")
         .description("Press Escape to cancel. Modifier-only keys are ignored.")
         .build();
