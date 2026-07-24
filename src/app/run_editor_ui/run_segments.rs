@@ -177,7 +177,7 @@ pub(super) fn populate_run_segments(
             .margin_bottom(4)
             .build();
         let icon_box = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        let drag_handle = gtk::Image::from_icon_name("list-drag-handle-symbolic");
+        let drag_handle = gtk::Image::from_icon_name("open-menu-symbolic");
         drag_handle.add_css_class("drag-handle");
         drag_handle.set_tooltip_text(Some("Drag to reorder segment"));
         drag_handle.set_cursor_from_name(Some("grab"));

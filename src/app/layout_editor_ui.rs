@@ -354,7 +354,7 @@ fn populate_component_list(
         if state.is_placeholder[index] {
             label.add_css_class("dim-label");
         }
-        let drag_handle = gtk::Image::from_icon_name("list-drag-handle-symbolic");
+        let drag_handle = gtk::Image::from_icon_name("open-menu-symbolic");
         drag_handle.set_tooltip_text(Some("Drag to reorder"));
         drag_handle.set_cursor_from_name(Some("grab"));
         let drag_source = gtk::DragSource::new();
