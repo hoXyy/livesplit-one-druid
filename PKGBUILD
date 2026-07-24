@@ -1,10 +1,10 @@
 # Maintainer: hoxi
 
-pkgname=livesplit-one-druid-git
-_pkgname=livesplit-one-druid
+pkgname=livesplit-one-gtk-git
+_pkgname=livesplit-one-gtk
 pkgver=0.7.2.r142.g86f2402
 pkgrel=1
-pkgdesc="Desktop version of LiveSplit One using the Druid framework"
+pkgdesc="Linux desktop version of LiveSplit One using GTK4 and libadwaita"
 arch=('x86_64')
 url="https://github.com/hoXyy/livesplit-one-druid"
 license=('MIT')
@@ -12,14 +12,16 @@ depends=(
   'cairo'
   'glib2'
   'glibc'
-  'gtk3'
+  'gtk4'
   'hicolor-icon-theme'
+  'libadwaita'
   'libgcc'
   'pango'
 )
 makedepends=('cargo' 'git')
-provides=('livesplit-one-druid')
+provides=('livesplit-one')
 conflicts=('livesplit-one-druid')
+replaces=('livesplit-one-druid')
 # GCC LTO objects produced by native Rust dependencies (such as mimalloc,
 # ring, and wasmtime) cannot be consumed by Cargo's final LLD link.
 options=('!lto')
@@ -47,9 +49,9 @@ package() {
   cd "${_pkgname}"
 
   install -Dm755 target/release/livesplit-one \
-    "${pkgdir}/usr/bin/livesplit-one-druid"
-  install -Dm644 packaging/livesplit-one-druid.desktop \
-    "${pkgdir}/usr/share/applications/livesplit-one-druid.desktop"
+    "${pkgdir}/usr/bin/livesplit-one"
+  install -Dm644 packaging/livesplit-one-gtk.desktop \
+    "${pkgdir}/usr/share/applications/livesplit-one-gtk.desktop"
   install -Dm644 icons/icon.svg \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/livesplit-one.svg"
   install -Dm644 icons/icon.png \

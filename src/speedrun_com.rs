@@ -27,7 +27,6 @@ pub struct Game {
 pub struct Category {
     pub id: String,
     pub name: String,
-    pub rules: String,
 }
 
 #[derive(Clone, Debug)]
@@ -48,7 +47,7 @@ pub struct Variable {
 fn get(path: &str, query: &[(&str, &str)]) -> Result<Value> {
     let mut request = ureq::get(&format!("{API}/{path}"))
         .timeout(Duration::from_secs(10))
-        .set("User-Agent", "LiveSplit-One-Druid/0.7");
+        .set("User-Agent", "LiveSplit-One-GTK/0.7");
     for (key, value) in query {
         request = request.query(key, value);
     }
@@ -94,7 +93,6 @@ pub fn categories(game_id: &str) -> Result<Vec<Category>> {
             Some(Category {
                 id: category["id"].as_str()?.to_owned(),
                 name: category["name"].as_str()?.to_owned(),
-                rules: category["rules"].as_str().unwrap_or_default().to_owned(),
             })
         })
         .collect::<Vec<_>>();

@@ -1,0 +1,17 @@
+.timer-window,
+.timer-window picture {
+  background: transparent;
+}
+
+.compact-row { min-height: 28px; }
+.completion-combo entry {
+  min-height: 24px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.completion-combo button.combo {
+  min-height: 24px;
+  min-width: 24px;
+  padding: 4px 6px;
+}
+.error { outline: 2px solid @error_color; }

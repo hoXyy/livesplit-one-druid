@@ -17,7 +17,7 @@
 
 %global rel 1.%{date}.git%{commit_short}%{?dist}
 
-Name: livesplit-one-druid
+Name: livesplit-one-gtk
 Version: 0.7.2
 Release: %{rel}
 Summary: A desktop version of LiveSplit One (hoxi's fork).
@@ -29,14 +29,19 @@ Source0: https://github.com/hoXyy/%{srcname}/archive/%{srcver}/%{srcname}-%{srcv
 BuildRequires:  cargo
 BuildRequires:  rust
 BuildRequires:  git
-BuildRequires:  gtk3-devel
+BuildRequires:  gtk4-devel >= 4.16
+BuildRequires:  libadwaita-devel >= 1.5
+BuildRequires:  libX11-devel
 BuildRequires:  pkgconfig
 BuildRequires:  desktop-file-utils
 BuildRequires:  glib2-devel
 BuildRequires:  cairo-devel
 BuildRequires:  pango-devel
-BuildRequires:  atk-devel
 BuildRequires:  gdk-pixbuf2-devel
+
+Provides: livesplit-one
+Obsoletes: livesplit-one-druid
+Conflicts: livesplit-one-druid
 
 %description
 A desktop version of LiveSplit One (hoxi's fork).
@@ -49,17 +54,17 @@ zcat %{SOURCE0} | tar xf - --strip-components=1
 cargo build --release %{?_smp_mflags}
 
 %install
-install -Dpm 0755 target/release/livesplit-one %{buildroot}%{_bindir}/%{name}
+install -Dpm 0755 target/release/livesplit-one %{buildroot}%{_bindir}/livesplit-one
 install -Dpm 0644 packaging/%{name}.desktop %{buildroot}%{_datadir}/applications/%{name}.desktop
-install -Dpm 0644 icons/icon.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/%{name}.svg
-install -Dpm 0644 icons/icon.png %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/%{name}.png
+install -Dpm 0644 icons/icon.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/livesplit-one.svg
+install -Dpm 0644 icons/icon.png %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/livesplit-one.png
 desktop-file-validate %{buildroot}%{_datadir}/applications/%{name}.desktop
 
 %files
-%{_bindir}/%{name}
+%{_bindir}/livesplit-one
 %{_datadir}/applications/%{name}.desktop
-%{_datadir}/icons/hicolor/scalable/apps/%{name}.svg
-%{_datadir}/icons/hicolor/256x256/apps/%{name}.png
+%{_datadir}/icons/hicolor/scalable/apps/livesplit-one.svg
+%{_datadir}/icons/hicolor/256x256/apps/livesplit-one.png
 %doc README.md
 
 %changelog

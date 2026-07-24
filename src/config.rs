@@ -1,6 +1,7 @@
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
-use druid::{Screen, WindowDesc};
 use livesplit_core::{
     event,
     layout::{self, Layout, LayoutSettings},
@@ -22,7 +23,9 @@ use std::{
     sync::Arc,
 };
 
-use crate::{cli, timer_form, LayoutData, MainState};
+use crate::{app::LayoutData, cli};
+
+type SplitsHistory = BTreeMap<Arc<str>, BTreeMap<Arc<str>, BTreeSet<Arc<Path>>>>;
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -46,7 +49,7 @@ struct Splits {
     #[serde(skip)]
     can_save: bool,
     #[serde(default)]
-    history: BTreeMap<Arc<str>, BTreeMap<Arc<str>, BTreeSet<Arc<Path>>>>,
+    history: SplitsHistory,
 }
 
 impl Splits {
@@ -227,13 +230,13 @@ impl Config {
         fs::write(CONFIG_PATH.as_path(), buf).ok()
     }
 
-    pub fn splits_history(&self) -> &BTreeMap<Arc<str>, BTreeMap<Arc<str>, BTreeSet<Arc<Path>>>> {
+    pub fn splits_history(&self) -> &SplitsHistory {
         &self.splits.history
     }
 
     fn parse_run_from_path(path: &Path) -> Option<(Run, bool)> {
-        let file = fs::read(&path).ok()?;
-        let parsed_run = composite::parse(&file, Some(&path)).ok()?;
+        let file = fs::read(path).ok()?;
+        let parsed_run = composite::parse(&file, Some(path)).ok()?;
         let run = parsed_run.run;
         let can_save = parsed_run.kind == TimerKind::LiveSplit;
         Some((run, can_save))
@@ -347,6 +350,10 @@ impl Config {
     pub fn set_hotkeys(&mut self, hotkeys: HotkeyConfig) {
         self.hotkeys = hotkeys;
         self.save_config();
+    }
+
+    pub fn hotkeys(&self) -> HotkeyConfig {
+        self.hotkeys
     }
 
     pub fn new_splits(&mut self, timer: &mut Timer) {
@@ -612,21 +619,8 @@ impl Config {
         Some(())
     }
 
-    pub fn build_window(&self) -> WindowDesc<MainState> {
-        let w = WindowDesc::new(timer_form::root_widget())
-            .title("LiveSplit One")
-            .with_min_size((50.0, 50.0))
-            .window_size((self.window.width, self.window.height))
-            .show_titlebar(false)
-            .transparent(true)
-            .set_always_on_top(true);
-        let (Some(x), Some(y)) = (self.window.x, self.window.y) else {
-            return w;
-        };
-        let Some(p) = validate_position((x, y)) else {
-            return w;
-        };
-        w.set_position(p)
+    pub fn window_position(&self) -> Option<(f64, f64)> {
+        Some((self.window.x?, self.window.y?))
     }
 
     #[cfg(feature = "auto-splitting")]
@@ -664,14 +658,7 @@ fn default_run() -> Run {
 }
 
 pub fn show_error(error: anyhow::Error) {
-    // this MessageDialog is for displaying errors,
-    // so I guess it's fine if it crashes? if it was going to crash anyway?
-    let _ = native_dialog::DialogBuilder::message()
-        .set_level(native_dialog::MessageLevel::Error)
-        .set_title("Error")
-        .set_text(&format!("{error:?}"))
-        .alert()
-        .show();
+    log::error!("{error:?}");
 }
 
 pub fn or_show_error(result: Result<()>) {
@@ -680,15 +667,27 @@ pub fn or_show_error(result: Result<()>) {
     }
 }
 
-fn validate_position(position: impl Into<druid::Point>) -> Option<druid::Point> {
-    let p = position.into();
-    if !Screen::get_display_rect().contains(p) {
-        return None;
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn legacy_window_fields_round_trip() {
+        let yaml = r#"
+window:
+  width: 420.0
+  height: 240.0
+  x: 17.0
+  y: 31.0
+  mouse-pass-through-while-running: true
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.window_size(), (420.0, 240.0));
+        assert_eq!(config.window_position(), Some((17.0, 31.0)));
+        assert!(config.get_mouse_pass_through_while_running());
+
+        let encoded = serde_yaml::to_string(&config).unwrap();
+        let decoded: Config = serde_yaml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.window_position(), Some((17.0, 31.0)));
     }
-    for m in Screen::get_monitors() {
-        if m.virtual_work_rect().contains(p) {
-            return Some(p);
-        }
-    }
-    None
 }
