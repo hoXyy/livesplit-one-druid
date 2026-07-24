@@ -192,17 +192,6 @@ pub(super) fn build_run_details_page(
         });
         metadata.add(&row.row);
     }
-    let run_id = adw::EntryRow::builder()
-        .title("speedrun.com Run ID")
-        .text(&state.metadata.run_id)
-        .build();
-    let run_id_editor = editor.clone();
-    run_id.connect_changed(move |row| {
-        if let Some(editor) = run_id_editor.borrow_mut().as_mut() {
-            editor.set_run_id(row.text().as_str());
-        }
-    });
-    metadata.add(&run_id);
     let emulator = adw::SwitchRow::builder()
         .title("Emulator")
         .subtitle("This run was performed using an emulator")
