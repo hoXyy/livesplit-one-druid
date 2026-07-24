@@ -20,8 +20,6 @@ depends=(
 )
 makedepends=('cargo' 'git')
 provides=('livesplit-one')
-conflicts=('livesplit-one-druid')
-replaces=('livesplit-one-druid')
 # GCC LTO objects produced by native Rust dependencies (such as mimalloc,
 # ring, and wasmtime) cannot be consumed by Cargo's final LLD link.
 options=('!lto')
@@ -49,13 +47,13 @@ package() {
   cd "${_pkgname}"
 
   install -Dm755 target/release/livesplit-one \
-    "${pkgdir}/usr/bin/livesplit-one"
+    "${pkgdir}/usr/bin/livesplit-one-gtk"
   install -Dm644 packaging/livesplit-one-gtk.desktop \
     "${pkgdir}/usr/share/applications/livesplit-one-gtk.desktop"
   install -Dm644 icons/icon.svg \
-    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/livesplit-one.svg"
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/livesplit-one-gtk.svg"
   install -Dm644 icons/icon.png \
-    "${pkgdir}/usr/share/pixmaps/livesplit-one.png"
+    "${pkgdir}/usr/share/pixmaps/livesplit-one-gtk.png"
   install -Dm644 README.md \
     "${pkgdir}/usr/share/doc/${pkgname}/README.md"
   install -Dm644 LICENSE \

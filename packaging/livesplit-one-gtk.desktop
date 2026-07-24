@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=LiveSplit One
-Comment=A LiveSplit One timer for Linux
-Exec=livesplit-one
-Icon=livesplit-one
+Name=LiveSplit One (GTK)
+Comment=A LiveSplit One timer for Linux (GTK)
+Exec=livesplit-one-gtk
+Icon=livesplit-one-gtk
 Categories=Game;Utility;
 Terminal=false
 StartupWMClass=org.livesplit.LiveSplitOne
