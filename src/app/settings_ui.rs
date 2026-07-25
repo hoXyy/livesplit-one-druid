@@ -161,7 +161,7 @@ pub(super) fn show_hotkey_permission_instructions(parent: &impl IsA<gtk::Window>
         .transient_for(parent)
         .modal(true)
         .default_width(620)
-        .default_height(560)
+        .default_height(620)
         .build();
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&adw::HeaderBar::new());
@@ -178,17 +178,15 @@ pub(super) fn show_hotkey_permission_instructions(parent: &impl IsA<gtk::Window>
     content.append(&title);
 
     let explanation = gtk::Label::new(Some(
-        "LiveSplit reads Linux input devices directly to detect keyboard and controller \
-shortcuts while another application is focused. You can leave global hotkeys disabled and \
-continue using LiveSplit normally.",
+        "On Wayland, LiveSplit reads Linux input devices directly to detect keyboard and controller \
+shortcuts while another application is focused.",
     ));
     explanation.set_wrap(true);
     explanation.set_xalign(0.0);
     content.append(&explanation);
 
     let warning = gtk::Label::new(Some(&format!(
-        "SECURITY WARNING\n\n{HOTKEY_PERMISSION_WARNING}\n\nThis permission is not limited to \
-LiveSplit. Only continue if you understand and accept the risk."
+        "SECURITY WARNING\n\n{HOTKEY_PERMISSION_WARNING}\n"
     )));
     warning.add_css_class("error");
     warning.add_css_class("heading");
@@ -197,27 +195,49 @@ LiveSplit. Only continue if you understand and accept the risk."
     content.append(&warning);
 
     let command_intro = gtk::Label::new(Some(
-        "If you accept the risk, deliberately enter this command in a terminal:",
+        "If you accept the risk, enter this command in a terminal:",
     ));
     command_intro.set_wrap(true);
     command_intro.set_xalign(0.0);
     content.append(&command_intro);
 
-    let command = gtk::Label::new(Some(r#"sudo usermod -aG input "$USER""#));
-    command.add_css_class("monospace");
-    command.set_xalign(0.0);
-    command.set_margin_start(12);
-    content.append(&command);
+    let group_add_command = gtk::Label::new(Some(r#"sudo usermod -aG input "$USER""#));
+    group_add_command.add_css_class("monospace");
+    group_add_command.set_xalign(0.0);
+    group_add_command.set_margin_start(12);
+    content.append(&group_add_command);
 
-    let after = gtk::Label::new(Some(
+    let after_group_add_command = gtk::Label::new(Some(
         "The command adds your account to the privileged input group. Fully sign out of your \
-graphical session and sign back in, then restart LiveSplit. Do not merely close LiveSplit or \
-open a new terminal.\n\nTo verify afterward, enter:  id -nG\n\nTo remove the permission, enter:  \
-sudo gpasswd -d \"$USER\" input\nThen fully sign out and back in again.",
+graphical session and sign back in, then restart LiveSplit. Just restarting LiveSplit is not enough.
+\nTo verify afterward, enter:",
     ));
-    after.set_wrap(true);
-    after.set_xalign(0.0);
-    content.append(&after);
+    after_group_add_command.set_wrap(true);
+    after_group_add_command.set_xalign(0.0);
+    content.append(&after_group_add_command);
+
+    let verify_command = gtk::Label::new(Some(r#"id -nG"#));
+    verify_command.add_css_class("monospace");
+    verify_command.set_xalign(0.0);
+    verify_command.set_margin_start(12);
+    content.append(&verify_command);
+
+    let after_verify_command = gtk::Label::new(Some("To remove the permission, enter:"));
+    after_verify_command.set_wrap(true);
+    after_verify_command.set_xalign(0.0);
+    content.append(&after_verify_command);
+
+    let remove_group_command = gtk::Label::new(Some(r#"sudo gpasswd -d "$USER" input"#));
+    remove_group_command.add_css_class("monospace");
+    remove_group_command.set_xalign(0.0);
+    remove_group_command.set_margin_start(12);
+    content.append(&remove_group_command);
+
+    let after_remove_group_command =
+        gtk::Label::new(Some("Then fully sign out and back in again."));
+    after_remove_group_command.set_wrap(true);
+    after_remove_group_command.set_xalign(0.0);
+    content.append(&after_remove_group_command);
 
     let scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)

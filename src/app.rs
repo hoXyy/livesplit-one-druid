@@ -28,7 +28,7 @@ use crate::{
 
 const HOTKEY_PERMISSION_WARNING: &str = "Granting this permission allows every program running \
 as your account to read raw keyboard and controller input, including passwords and other \
-sensitive keystrokes.";
+sensitive keystrokes. Keep this in mind when following these instructions.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HotkeyAvailability {
