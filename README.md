@@ -6,7 +6,7 @@ and [livesplit-core].
 ## Build requirements
 
 - Rust stable
-- GTK 4.16 or newer
+- GTK 4.14 or newer
 - libadwaita 1.5 or newer
 - X11 development libraries for the X11 placement backend
 

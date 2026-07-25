@@ -15,7 +15,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -26,14 +26,12 @@ jobs:
         include:
           - label: Linux x86_64
             target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
             features: auto-splitting
 
           - label: Linux x86_64-v3
             target: x86_64-unknown-linux-gnu
             target_rename: x86_64_v3-unknown-linux-gnu
             rust_flags: -C target-cpu=x86-64-v3
-            os: ubuntu-latest
             features: auto-splitting
 
     steps:
@@ -45,7 +43,7 @@ jobs:
         with:
           rust-version: 'stable'
 
-      - name: Install apt packages
+      - name: Install system packages
         run: |
           sudo apt-get update
           sudo apt-get install --assume-yes libgtk-4-dev libadwaita-1-dev
@@ -86,7 +84,7 @@ jobs:
         with:
           components: clippy
 
-      - name: Install apt packages
+      - name: Install system packages
         run: |
           sudo apt-get update
           sudo apt-get install --assume-yes libgtk-4-dev libadwaita-1-dev
