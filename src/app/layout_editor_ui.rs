@@ -191,6 +191,7 @@ const COMPONENT_NAMES: &[&str] = &[
     "PB Chance",
     "Possible Time Save",
     "Previous Segment",
+    "Reset Chance",
     "Segment Time",
     "Separator",
     "Splits",
@@ -238,7 +239,7 @@ fn open_add_component_window(
         ));
         choices.append(&row);
     }
-    choices.select_row(choices.row_at_index(10).as_ref());
+    choices.select_row(choices.row_at_index(11).as_ref());
     let scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vexpand(true)
@@ -311,19 +312,20 @@ fn new_layout_component(index: u32) -> livesplit_core::layout::Component {
         5 => component::pb_chance::Component::new().into(),
         6 => component::possible_time_save::Component::new().into(),
         7 => component::previous_segment::Component::new().into(),
-        8 => component::segment_time::Component::new().into(),
-        9 => component::separator::Component::new().into(),
-        10 => component::splits::Component::new(livesplit_core::Lang::English).into(),
-        11 => component::sum_of_best::Component::new().into(),
-        12 => component::text::Component::new().into(),
-        13 => component::timer::Component::new().into(),
-        14 => component::title::Component::new().into(),
-        15 => component::total_playtime::Component::new().into(),
-        16 => component::alternate_timing_method::Component::new().into(),
-        17 => component::blank_space::Component::new().into(),
-        18 => component::world_record::Component::new().into(),
-        19 => component::group::Component::new().into(),
-        20 => component::carousel::Component::new().into(),
+        8 => component::reset_chance::Component::new().into(),
+        9 => component::segment_time::Component::new().into(),
+        10 => component::separator::Component::new().into(),
+        11 => component::splits::Component::new(livesplit_core::Lang::English).into(),
+        12 => component::sum_of_best::Component::new().into(),
+        13 => component::text::Component::new().into(),
+        14 => component::timer::Component::new().into(),
+        15 => component::title::Component::new().into(),
+        16 => component::total_playtime::Component::new().into(),
+        17 => component::alternate_timing_method::Component::new().into(),
+        18 => component::blank_space::Component::new().into(),
+        19 => component::world_record::Component::new().into(),
+        20 => component::group::Component::new().into(),
+        21 => component::carousel::Component::new().into(),
         _ => Component::from(component::splits::Component::new(
             livesplit_core::Lang::English,
         )),

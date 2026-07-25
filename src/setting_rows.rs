@@ -176,6 +176,66 @@ pub fn build_setting_row(field: &Field, changed: SettingChanged) -> adw::Prefere
                 },
             )
         }
+        Value::ResetChanceMode(value) => {
+            use livesplit_core::component::reset_chance::ChanceMode::*;
+            enum_row(
+                field,
+                &["Reset Chance", "Success Chance", "Runs Ended"],
+                match value {
+                    ResetChance => 0,
+                    SuccessChance => 1,
+                    RunsEnded => 2,
+                },
+                changed,
+                |index| {
+                    Value::ResetChanceMode(match index {
+                        1 => SuccessChance,
+                        2 => RunsEnded,
+                        _ => ResetChance,
+                    })
+                },
+            )
+        }
+        Value::ResetChanceCalculationBasis(value) => {
+            use livesplit_core::component::reset_chance::CalculationBasis::*;
+            enum_row(
+                field,
+                &["All Runs", "Recent Runs", "Recent Split Attempts"],
+                match value {
+                    AllRuns => 0,
+                    RecentRuns => 1,
+                    RecentSplitAttempts => 2,
+                },
+                changed,
+                |index| {
+                    Value::ResetChanceCalculationBasis(match index {
+                        1 => RecentRuns,
+                        2 => RecentSplitAttempts,
+                        _ => AllRuns,
+                    })
+                },
+            )
+        }
+        Value::ResetChancePercentageAccuracy(value) => {
+            use livesplit_core::component::reset_chance::PercentageAccuracy::*;
+            enum_row(
+                field,
+                &["Whole Percent", "Tenths", "Hundredths"],
+                match value {
+                    Integer => 0,
+                    Tenths => 1,
+                    Hundredths => 2,
+                },
+                changed,
+                |index| {
+                    Value::ResetChancePercentageAccuracy(match index {
+                        1 => Tenths,
+                        2 => Hundredths,
+                        _ => Integer,
+                    })
+                },
+            )
+        }
         Value::OptionalTimingMethod(value) => enum_row(
             field,
             &["Current", "Real Time", "Game Time"],
