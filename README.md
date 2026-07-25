@@ -3,6 +3,9 @@
 An **unofficial** Linux desktop version of LiveSplit One built with Relm4, GTK 4, libadwaita,
 and [livesplit-core].
 
+Available as a package:
+- AUR: [livesplit-one-gtk-git](https://aur.archlinux.org/packages/livesplit-one-gtk-git)
+
 ## Build requirements
 
 - Rust stable
