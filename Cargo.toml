@@ -34,6 +34,9 @@ ureq = "2.12.1"
 roxmltree = "0.20.0"
 pulldown-cmark = { version = "0.13.0", default-features = false }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.31.3", features = ["user"] }
+
 [build-dependencies]
 glib-build-tools = "0.22"
 

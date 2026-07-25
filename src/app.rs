@@ -23,8 +23,60 @@ use relm4::{ComponentParts, ComponentSender, SimpleComponent};
 use crate::config::AutoSplitterAssociation;
 use crate::{
     config::Config,
-    platform::{Platform, TimerWindowPlatform},
+    platform::{DisplayBackend, Platform, TimerWindowPlatform},
 };
+
+const HOTKEY_PERMISSION_WARNING: &str = "Granting this permission allows every program running \
+as your account to read raw keyboard and controller input, including passwords and other \
+sensitive keystrokes. Keep this in mind when following these instructions.";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HotkeyAvailability {
+    Available,
+    MissingInputGroup,
+    InputGroupUnavailable,
+    InitializationFailed(String),
+}
+
+impl HotkeyAvailability {
+    fn is_available(&self) -> bool {
+        matches!(self, Self::Available)
+    }
+}
+
+fn classify_wayland_hotkey_permission(
+    backend: DisplayBackend,
+    input_group_exists: bool,
+    is_input_group_member: bool,
+) -> HotkeyAvailability {
+    if backend != DisplayBackend::WaylandStandard {
+        HotkeyAvailability::Available
+    } else if !input_group_exists {
+        HotkeyAvailability::InputGroupUnavailable
+    } else if !is_input_group_member {
+        HotkeyAvailability::MissingInputGroup
+    } else {
+        HotkeyAvailability::Available
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn hotkey_permission_status(backend: DisplayBackend) -> HotkeyAvailability {
+    use nix::unistd::{getgroups, Group};
+
+    let Ok(Some(input_group)) = Group::from_name("input") else {
+        return classify_wayland_hotkey_permission(backend, false, false);
+    };
+    let is_member = getgroups()
+        .map(|groups| groups.contains(&input_group.gid))
+        .unwrap_or(false);
+    classify_wayland_hotkey_permission(backend, true, is_member)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn hotkey_permission_status(_backend: DisplayBackend) -> HotkeyAvailability {
+    HotkeyAvailability::Available
+}
 
 #[derive(Clone)]
 pub struct LayoutDraft(Arc<Mutex<Option<Layout>>>);
@@ -171,6 +223,7 @@ pub struct AppModel {
     pub config: RefCell<Config>,
     pub image_cache: Rc<RefCell<ImageCache>>,
     pub hotkey_system: Option<HotkeySystem<SharedTimer>>,
+    pub hotkey_availability: HotkeyAvailability,
     pub render_size: Cell<(u32, u32)>,
     pub open_editors: OpenEditors,
     pub pending_intent: Intent,
@@ -249,13 +302,26 @@ impl SimpleComponent for AppModel {
         let auto_splitter = Rc::new(livesplit_core::auto_splitting::Runtime::new());
         #[cfg(feature = "auto-splitting")]
         config.maybe_load_auto_splitter(&auto_splitter, timer.clone());
-        let hotkey_system = Some(config.configure_hotkeys(timer.clone()));
         let (window_width, window_height) = config.window_size();
         let width = window_width.round() as i32;
         let height = window_height.round() as i32;
         let widgets = view_output!();
         let picture = widgets.picture.clone();
         let platform = Platform::detect();
+        let mut hotkey_availability = hotkey_permission_status(platform.backend());
+        let hotkey_system = if hotkey_availability.is_available() {
+            match config.configure_hotkeys(timer.clone()) {
+                Ok(system) => Some(system),
+                Err(error) => {
+                    log::error!("Global hotkey initialization failed: {error}");
+                    hotkey_availability =
+                        HotkeyAvailability::InitializationFailed(error.to_string());
+                    None
+                }
+            }
+        } else {
+            None
+        };
         platform.configure(&root, &config);
 
         install_timer_interactions(&root, &picture, &timer, &config, platform, &sender);
@@ -281,6 +347,7 @@ impl SimpleComponent for AppModel {
             config: RefCell::new(config),
             image_cache: Rc::new(RefCell::new(ImageCache::new())),
             hotkey_system,
+            hotkey_availability,
             render_size: Cell::new((width as u32, height as u32)),
             open_editors: OpenEditors::default(),
             pending_intent: Intent::None,
@@ -298,11 +365,17 @@ impl SimpleComponent for AppModel {
             mouse_passthrough: Cell::new(false),
         };
 
-        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-            match sender.input_sender().send(AppMsg::RenderTick) {
+        let render_sender = sender.clone();
+        glib::timeout_add_local(
+            std::time::Duration::from_millis(16),
+            move || match render_sender.input_sender().send(AppMsg::RenderTick) {
                 Ok(()) => glib::ControlFlow::Continue,
                 Err(_) => glib::ControlFlow::Break,
-            }
+            },
+        );
+        let configured_sender = sender.clone();
+        glib::idle_add_local_once(move || {
+            configured_sender.input(AppMsg::MainWindowConfigured);
         });
 
         ComponentParts { model, widgets }
@@ -409,7 +482,7 @@ impl SimpleComponent for AppModel {
                 EditorKind::NotesViewer => self.open_notes_viewer(&sender),
                 _ => {}
             },
-            AppMsg::MainWindowConfigured => {}
+            AppMsg::MainWindowConfigured => self.show_hotkey_warning(),
             AppMsg::MainWindowCloseRequested => self.pending_intent = Intent::Exit,
             AppMsg::RequestAction(action) => self.request_action(action, &sender),
             AppMsg::ExecuteAction(action) => self.execute_action(action, &sender),
@@ -854,6 +927,7 @@ impl AppModel {
             &self.window,
             self.config.borrow().get_mouse_pass_through_while_running(),
             self.platform.backend(),
+            &self.hotkey_availability,
             draft,
             sender,
         );
@@ -861,6 +935,63 @@ impl AppModel {
             .0
             .insert(EditorKind::Window, window.clone());
         window.present();
+    }
+
+    fn show_hotkey_warning(&self) {
+        if self.hotkey_availability.is_available() {
+            return;
+        }
+        let (detail, can_show_instructions) = match &self.hotkey_availability {
+            HotkeyAvailability::MissingInputGroup => (
+                format!(
+                    "On Wayland, LiveSplit needs permission to read Linux input devices for \
+system-wide hotkeys. LiveSplit will continue working without global hotkeys.\n\n\
+Security warning: {HOTKEY_PERMISSION_WARNING}\n\n\
+Manual permission instructions are available in the application."
+                ),
+                true,
+            ),
+            HotkeyAvailability::InputGroupUnavailable => (
+                "This system has no resolvable input group. LiveSplit will continue working \
+without global hotkeys. Consult your distribution's input-device permission documentation; \
+do not create a group or make input devices world-readable solely for LiveSplit."
+                    .to_owned(),
+                false,
+            ),
+            HotkeyAvailability::InitializationFailed(error) => (
+                format!(
+                    "LiveSplit could not initialize global hotkeys and will continue without \
+them.\n\nDiagnostic: {error}\n\nSee the application log and your distribution's documentation."
+                ),
+                false,
+            ),
+            HotkeyAvailability::Available => return,
+        };
+        let dialog = gtk::AlertDialog::builder()
+            .message("Global hotkeys are disabled")
+            .detail(detail)
+            .modal(true)
+            .build();
+        if can_show_instructions {
+            dialog.set_buttons(&["Continue Without Hotkeys", "Open Instructions"]);
+            dialog.set_cancel_button(0);
+            dialog.set_default_button(0);
+            let parent = self.window.clone();
+            dialog.choose(
+                Some(&self.window),
+                gio::Cancellable::NONE,
+                move |response| {
+                    if response.ok() == Some(1) {
+                        settings_ui::show_hotkey_permission_instructions(&parent);
+                    }
+                },
+            );
+        } else {
+            dialog.set_buttons(&["Continue Without Hotkeys"]);
+            dialog.set_cancel_button(0);
+            dialog.set_default_button(0);
+            dialog.show(Some(&self.window));
+        }
     }
 
     fn open_run_editor(&mut self, sender: &ComponentSender<Self>) {
@@ -997,9 +1128,11 @@ impl AppModel {
 mod tests {
     use super::timer_window::timer_resize_edge;
     use super::{
-        physical_to_logical_size, relevant_changes, scroll_layout, should_mouse_passthrough,
-        Intent, LayoutData, PendingAction,
+        classify_wayland_hotkey_permission, physical_to_logical_size, relevant_changes,
+        scroll_layout, should_mouse_passthrough, HotkeyAvailability, Intent, LayoutData,
+        PendingAction,
     };
+    use crate::platform::DisplayBackend;
     use gtk::gdk;
     use std::cell::RefCell;
 
@@ -1009,6 +1142,30 @@ mod tests {
         assert_eq!(pending, Intent::Exit);
         pending = Intent::None;
         assert_eq!(pending, Intent::None);
+    }
+
+    #[test]
+    fn wayland_hotkeys_require_the_input_group() {
+        assert_eq!(
+            classify_wayland_hotkey_permission(DisplayBackend::WaylandStandard, true, true),
+            HotkeyAvailability::Available
+        );
+        assert_eq!(
+            classify_wayland_hotkey_permission(DisplayBackend::WaylandStandard, true, false),
+            HotkeyAvailability::MissingInputGroup
+        );
+        assert_eq!(
+            classify_wayland_hotkey_permission(DisplayBackend::WaylandStandard, false, false),
+            HotkeyAvailability::InputGroupUnavailable
+        );
+    }
+
+    #[test]
+    fn x11_hotkeys_do_not_require_the_wayland_preflight() {
+        assert_eq!(
+            classify_wayland_hotkey_permission(DisplayBackend::X11, false, false),
+            HotkeyAvailability::Available
+        );
     }
 
     #[test]

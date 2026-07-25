@@ -334,8 +334,8 @@ impl Config {
     pub fn configure_hotkeys<E: event::CommandSink + Clone + Send + 'static>(
         &self,
         command_sink: E,
-    ) -> HotkeySystem<E> {
-        HotkeySystem::with_config(command_sink, self.hotkeys).unwrap()
+    ) -> livesplit_core::hotkey::Result<HotkeySystem<E>> {
+        HotkeySystem::with_config(command_sink, self.hotkeys)
     }
 
     pub fn configure_timer(&self, timer: &mut Timer) {

@@ -4,6 +4,7 @@ pub(super) fn build_settings_editor(
     parent: &gtk::ApplicationWindow,
     initial_pass_through: bool,
     backend: crate::platform::DisplayBackend,
+    hotkey_availability: &HotkeyAvailability,
     draft: Rc<RefCell<livesplit_core::HotkeyConfig>>,
     sender: &ComponentSender<AppModel>,
 ) -> adw::ApplicationWindow {
@@ -52,6 +53,29 @@ pub(super) fn build_settings_editor(
         .title("Global Hotkeys")
         .description("Click a shortcut to capture a new key combination")
         .build();
+    if hotkey_availability.is_available() {
+        let available = adw::Banner::builder()
+            .title("Global hotkeys are active and expected to work system-wide.")
+            .revealed(true)
+            .build();
+        content.append(&available);
+    } else {
+        let unavailable = adw::Banner::builder()
+            .title(
+                "Global hotkeys are disabled. Shortcut changes will be saved, but will not \
+activate until permissions are corrected.",
+            )
+            .revealed(true)
+            .build();
+        if matches!(hotkey_availability, HotkeyAvailability::MissingInputGroup) {
+            unavailable.set_button_label(Some("View Permission Instructions"));
+            let instructions_parent = window.clone();
+            unavailable.connect_button_clicked(move |_| {
+                show_hotkey_permission_instructions(&instructions_parent);
+            });
+        }
+        content.append(&unavailable);
+    }
     let description = draft
         .borrow()
         .settings_description(livesplit_core::Lang::English);
@@ -129,6 +153,100 @@ pub(super) fn build_settings_editor(
         glib::Propagation::Proceed
     });
     window
+}
+
+pub(super) fn show_hotkey_permission_instructions(parent: &impl IsA<gtk::Window>) {
+    let window = adw::ApplicationWindow::builder()
+        .title("Wayland Hotkey Permission")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(620)
+        .default_height(620)
+        .build();
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&adw::HeaderBar::new());
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.set_margin_start(24);
+    content.set_margin_end(24);
+    content.set_margin_top(24);
+    content.set_margin_bottom(24);
+
+    let title = gtk::Label::new(Some("Enable global hotkeys manually"));
+    title.add_css_class("title-1");
+    title.set_wrap(true);
+    title.set_xalign(0.0);
+    content.append(&title);
+
+    let explanation = gtk::Label::new(Some(
+        "On Wayland, LiveSplit reads Linux input devices directly to detect keyboard and controller \
+shortcuts while another application is focused.",
+    ));
+    explanation.set_wrap(true);
+    explanation.set_xalign(0.0);
+    content.append(&explanation);
+
+    let warning = gtk::Label::new(Some(&format!(
+        "SECURITY WARNING\n\n{HOTKEY_PERMISSION_WARNING}\n"
+    )));
+    warning.add_css_class("error");
+    warning.add_css_class("heading");
+    warning.set_wrap(true);
+    warning.set_xalign(0.0);
+    content.append(&warning);
+
+    let command_intro = gtk::Label::new(Some(
+        "If you accept the risk, enter this command in a terminal:",
+    ));
+    command_intro.set_wrap(true);
+    command_intro.set_xalign(0.0);
+    content.append(&command_intro);
+
+    let group_add_command = gtk::Label::new(Some(r#"sudo usermod -aG input "$USER""#));
+    group_add_command.add_css_class("monospace");
+    group_add_command.set_xalign(0.0);
+    group_add_command.set_margin_start(12);
+    content.append(&group_add_command);
+
+    let after_group_add_command = gtk::Label::new(Some(
+        "The command adds your account to the privileged input group. Fully sign out of your \
+graphical session and sign back in, then restart LiveSplit. Just restarting LiveSplit is not enough.
+\nTo verify afterward, enter:",
+    ));
+    after_group_add_command.set_wrap(true);
+    after_group_add_command.set_xalign(0.0);
+    content.append(&after_group_add_command);
+
+    let verify_command = gtk::Label::new(Some(r#"id -nG"#));
+    verify_command.add_css_class("monospace");
+    verify_command.set_xalign(0.0);
+    verify_command.set_margin_start(12);
+    content.append(&verify_command);
+
+    let after_verify_command = gtk::Label::new(Some("To remove the permission, enter:"));
+    after_verify_command.set_wrap(true);
+    after_verify_command.set_xalign(0.0);
+    content.append(&after_verify_command);
+
+    let remove_group_command = gtk::Label::new(Some(r#"sudo gpasswd -d "$USER" input"#));
+    remove_group_command.add_css_class("monospace");
+    remove_group_command.set_xalign(0.0);
+    remove_group_command.set_margin_start(12);
+    content.append(&remove_group_command);
+
+    let after_remove_group_command =
+        gtk::Label::new(Some("Then fully sign out and back in again."));
+    after_remove_group_command.set_wrap(true);
+    after_remove_group_command.set_xalign(0.0);
+    content.append(&after_remove_group_command);
+
+    let scrolled = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&content)
+        .build();
+    toolbar.set_content(Some(&scrolled));
+    window.set_content(Some(&toolbar));
+    window.present();
 }
 
 fn open_hotkey_capture(

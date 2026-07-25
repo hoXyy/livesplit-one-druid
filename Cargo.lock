@@ -2216,6 +2216,7 @@ dependencies = [
  "livesplit-core",
  "log",
  "mimalloc",
+ "nix 0.31.3",
  "once_cell",
  "pulldown-cmark",
  "relm4",
