@@ -63,7 +63,7 @@ pub(super) fn build_settings_editor(
         let unavailable = adw::Banner::builder()
             .title(
                 "Global hotkeys are disabled. Shortcut changes will be saved, but will not \
-activate until permissions are corrected and LiveSplit is restarted.",
+activate until permissions are corrected.",
             )
             .revealed(true)
             .build();
