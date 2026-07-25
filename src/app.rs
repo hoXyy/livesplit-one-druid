@@ -60,7 +60,6 @@ fn classify_wayland_hotkey_permission(
     }
 }
 
-#[cfg(target_os = "linux")]
 fn hotkey_permission_status(backend: DisplayBackend) -> HotkeyAvailability {
     use nix::unistd::{getgroups, Group};
 
@@ -71,11 +70,6 @@ fn hotkey_permission_status(backend: DisplayBackend) -> HotkeyAvailability {
         .map(|groups| groups.contains(&input_group.gid))
         .unwrap_or(false);
     classify_wayland_hotkey_permission(backend, true, is_member)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn hotkey_permission_status(_backend: DisplayBackend) -> HotkeyAvailability {
-    HotkeyAvailability::Available
 }
 
 #[derive(Clone)]
