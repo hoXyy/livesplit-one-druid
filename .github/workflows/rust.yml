@@ -15,112 +15,24 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         label:
-          - Windows aarch64
-          # - Windows i686
-          - Windows x86_64
-          - Windows x86_64-v3
-          # - Linux arm Hardware Float
-          # - Linux armv7 Hardware Float
-          # - Linux aarch64
-          # - Linux i686
           - Linux x86_64
           - Linux x86_64-v3
-          - macOS aarch64
-          - macOS x86_64
-          - macOS x86_64-v3
 
         include:
-          - label: Windows aarch64
-            target: aarch64-pc-windows-msvc
-            os: windows-latest
-            cross: skip
-            install_target: true
-
-          # - label: Windows i686
-          #   target: i686-pc-windows-msvc
-          #   os: windows-latest
-          #   cross: skip
-          #   install_target: true
-
-          - label: Windows x86_64
-            target: x86_64-pc-windows-msvc
-            os: windows-latest
-            features: auto-splitting
-            cross: skip
-            install_target: true
-
-          - label: Windows x86_64-v3
-            target: x86_64-pc-windows-msvc
-            target_rename: x86_64_v3-pc-windows-msvc
-            rust_flags: -C target-cpu=x86-64-v3
-            os: windows-latest
-            features: auto-splitting
-            cross: skip
-            install_target: true
-
-          # - label: Linux arm Hardware Float
-          #   target: arm-unknown-linux-gnueabihf
-          #   os: ubuntu-latest
-
-          # - label: Linux armv7 Hardware Float
-          #   target: armv7-unknown-linux-gnueabihf
-          #   os: ubuntu-latest
-
-          # - label: Linux aarch64
-          #   target: aarch64-unknown-linux-gnu
-          #   os: ubuntu-latest
-          #   features: auto-splitting
-
-          # - label: Linux i686
-          #   target: i686-unknown-linux-gnu
-          #   os: ubuntu-22.04
-          #   apt_arch: i386
-          #   cross: skip
-          #   install_target: true
-
           - label: Linux x86_64
             target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-            apt_arch: amd64
             features: auto-splitting
-            cross: skip
 
           - label: Linux x86_64-v3
             target: x86_64-unknown-linux-gnu
             target_rename: x86_64_v3-unknown-linux-gnu
             rust_flags: -C target-cpu=x86-64-v3
-            os: ubuntu-22.04
-            apt_arch: amd64
             features: auto-splitting
-            cross: skip
-
-          - label: macOS aarch64
-            target: aarch64-apple-darwin
-            os: macOS-latest
-            features: auto-splitting
-            cross: skip
-            install_target: true
-
-          - label: macOS x86_64
-            target: x86_64-apple-darwin
-            os: macOS-latest
-            features: auto-splitting
-            cross: skip
-            install_target: true
-
-          - label: macOS x86_64-v3
-            target: x86_64-apple-darwin
-            target_rename: x86_64_v3-apple-darwin
-            rust_flags: -C target-cpu=x86-64-v3
-            os: macOS-latest
-            features: auto-splitting
-            cross: skip
-            install_target: true
 
     steps:
       - name: Checkout Commit
@@ -131,37 +43,15 @@ jobs:
         with:
           rust-version: 'stable'
 
-      - name: Install Target
-        if: matrix.install_target != ''
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Download cross
-        if: matrix.cross == ''
-        uses: robinraju/release-downloader@v1.7
-        with:
-          repository: "cross-rs/cross"
-          latest: true
-          fileName: "cross-x86_64-unknown-linux-gnu.tar.gz"
-          out-file-path: "/home/runner/.cargo/bin"
-
-      - name: Install cross
-        if: matrix.cross == ''
+      - name: Install system packages
         run: |
-          cd ~/.cargo/bin
-          tar -xzf cross-x86_64-unknown-linux-gnu.tar.gz
-
-      - name: Install apt packages
-        if: matrix.cross == 'skip' && startsWith(matrix.os, 'ubuntu-')
-        run: |
-          sudo dpkg --add-architecture ${{ matrix.apt_arch }}
           sudo apt-get update
-          sudo apt-get install --assume-yes libgtk-3-dev:${{ matrix.apt_arch }}
+          sudo apt-get install --assume-yes libgtk-4-dev libadwaita-1-dev
 
       - name: Build
         run: bash .github/workflows/build.sh
         env:
           TARGET: ${{ matrix.target }}
-          SKIP_CROSS: ${{ matrix.cross }}
           IS_DEPLOY: ${{ startsWith(github.ref, 'refs/tags/') }}
           FEATURES: ${{ matrix.features }}
           RUSTFLAGS: ${{ matrix.rust_flags }}
@@ -170,7 +60,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: bash .github/workflows/before_deploy.sh
         env:
-          OS_NAME: ${{ matrix.os }}
           TARGET: ${{ matrix.target }}
           RELEASE_TARGET: ${{ matrix.target_rename || matrix.target }}
 
@@ -185,7 +74,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   clippy:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Commit
         uses: actions/checkout@v4
@@ -194,6 +83,11 @@ jobs:
         uses: hecrj/setup-rust-action@v2
         with:
           components: clippy
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install --assume-yes libgtk-4-dev libadwaita-1-dev
 
       - name: Run Clippy
         run: cargo clippy --all-features

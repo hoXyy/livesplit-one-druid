@@ -9,7 +9,7 @@ build = "build.rs"
 
 [dependencies]
 relm4 = { version = "0.11", features = ["libadwaita"] }
-gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 gdk4-x11 = "0.11"
 x11rb = "0.13"
@@ -33,8 +33,6 @@ clap = { version = "4.5.20", features = ["derive"] }
 ureq = "2.12.1"
 roxmltree = "0.20.0"
 pulldown-cmark = { version = "0.13.0", default-features = false }
-
-[target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.31.3", features = ["user"] }
 
 [build-dependencies]
