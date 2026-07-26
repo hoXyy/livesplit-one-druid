@@ -831,7 +831,7 @@ impl AppModel {
             .detail(format!("There are unsaved changes to {what}."))
             .modal(true)
             .build();
-        dialog.set_buttons(&["Cancel", "Discard Changes", "Save"]);
+        dialog.set_buttons(&["Save", "Discard Changes", "Cancel"]);
         dialog.set_cancel_button(0);
         dialog.set_default_button(2);
         let sender = sender.clone();
@@ -840,7 +840,7 @@ impl AppModel {
             gio::Cancellable::NONE,
             move |response| match response.ok() {
                 Some(1) => sender.input(AppMsg::ExecuteAction(action)),
-                Some(2) => sender.input(AppMsg::SaveBeforeAction(action)),
+                Some(0) => sender.input(AppMsg::SaveBeforeAction(action)),
                 _ => {}
             },
         );
