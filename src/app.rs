@@ -832,8 +832,8 @@ impl AppModel {
             .modal(true)
             .build();
         dialog.set_buttons(&["Save", "Discard Changes", "Cancel"]);
-        dialog.set_cancel_button(0);
-        dialog.set_default_button(2);
+        dialog.set_cancel_button(2);
+        dialog.set_default_button(0);
         let sender = sender.clone();
         dialog.choose(
             Some(&self.window),
