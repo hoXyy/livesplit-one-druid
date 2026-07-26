@@ -1,7 +1,7 @@
 # LiveSplit One GTK
 
 An **unofficial** Linux desktop version of LiveSplit One built with Relm4, GTK 4, libadwaita,
-and [livesplit-core].
+and [livesplit-core]. Based on [AlexKnaught's version of livesplit-one-druid](https://github.com/AlexKnauth/livesplit-one-druid).
 
 Available as a package:
 - AUR: [livesplit-one-gtk-git](https://aur.archlinux.org/packages/livesplit-one-gtk-git)
