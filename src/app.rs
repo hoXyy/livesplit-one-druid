@@ -2,7 +2,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -129,6 +129,12 @@ pub enum PendingAction {
     Exit,
 }
 
+struct PendingActionState {
+    action: PendingAction,
+    documents: VecDeque<PendingDocument>,
+    current_document: Option<PendingDocument>,
+}
+
 fn relevant_changes(action: &PendingAction, splits: bool, layout: bool) -> (bool, bool) {
     match action {
         PendingAction::NewSplits => (splits, false),
@@ -192,9 +198,10 @@ pub enum AppMsg {
     MainWindowCloseRequested,
     RequestAction(PendingAction),
     ExecuteAction(PendingAction),
-    SaveBeforeAction(PendingAction),
-    SaveSplitsAsThen(PathBuf, PendingAction),
-    SaveLayoutAsThen(PathBuf, PendingAction),
+    ContinuePendingAction,
+    ResolvePendingChange(PendingChangeDecision),
+    SavePendingSplitsAs(PathBuf),
+    SavePendingLayoutAs(PathBuf),
     NewSplits,
     OpenSplits(PathBuf),
     SaveSplits,
@@ -222,6 +229,7 @@ pub struct AppModel {
     pub open_editors: OpenEditors,
     pub pending_intent: Intent,
     pub pending_world_records: HashMap<usize, Instant>,
+    pending_action: Option<PendingActionState>,
     active_layout_editor: Option<Rc<RefCell<Option<livesplit_core::LayoutEditor>>>>,
     active_run_editor: Option<Rc<RefCell<Option<livesplit_core::RunEditor>>>>,
     notes_viewer: Option<NotesViewerUi>,
@@ -245,6 +253,7 @@ mod completion_entry;
 mod file_dialogs;
 mod layout_editor_ui;
 mod notes_ui;
+mod pending_changes_ui;
 mod run_editor_ui;
 mod settings_ui;
 mod timer_window;
@@ -253,6 +262,9 @@ use completion_entry::CompletionEntryRow;
 use file_dialogs::{choose_save_path, select_file};
 use layout_editor_ui::build_layout_editor;
 use notes_ui::{build_notes_editor, build_notes_viewer, set_markdown_buffer};
+use pending_changes_ui::{
+    confirm_unsaved_layout, confirm_unsaved_splits, PendingChangeDecision, PendingDocument,
+};
 use run_editor_ui::build_run_editor;
 use settings_ui::build_settings_editor;
 use timer_window::install_timer_interactions;
@@ -346,6 +358,7 @@ impl SimpleComponent for AppModel {
             open_editors: OpenEditors::default(),
             pending_intent: Intent::None,
             pending_world_records: HashMap::new(),
+            pending_action: None,
             active_layout_editor: None,
             active_run_editor: None,
             notes_viewer: None,
@@ -480,8 +493,11 @@ impl SimpleComponent for AppModel {
             AppMsg::MainWindowCloseRequested => self.pending_intent = Intent::Exit,
             AppMsg::RequestAction(action) => self.request_action(action, &sender),
             AppMsg::ExecuteAction(action) => self.execute_action(action, &sender),
-            AppMsg::SaveBeforeAction(action) => self.save_before_action(action, &sender),
-            AppMsg::SaveSplitsAsThen(path, action) => {
+            AppMsg::ContinuePendingAction => self.continue_pending_action(&sender),
+            AppMsg::ResolvePendingChange(decision) => {
+                self.resolve_pending_change(decision, &sender);
+            }
+            AppMsg::SavePendingSplitsAs(path) => {
                 let result = self.config.borrow_mut().save_splits_as(
                     &mut self.timer.write().unwrap(),
                     #[cfg(feature = "auto-splitting")]
@@ -490,11 +506,11 @@ impl SimpleComponent for AppModel {
                 );
                 if result.is_ok() {
                     self.set_notes_actions_enabled(true);
-                    sender.input(AppMsg::SaveBeforeAction(action));
+                    sender.input(AppMsg::ContinuePendingAction);
                 }
                 crate::config::or_show_error(result);
             }
-            AppMsg::SaveLayoutAsThen(path, action) => {
+            AppMsg::SavePendingLayoutAs(path) => {
                 let settings = self.layout.borrow().layout.settings();
                 let result = self.config.borrow_mut().save_layout_as(
                     &mut self.timer.write().unwrap(),
@@ -503,7 +519,7 @@ impl SimpleComponent for AppModel {
                 );
                 if result.is_ok() {
                     self.layout.borrow_mut().is_modified = false;
-                    sender.input(AppMsg::SaveBeforeAction(action));
+                    sender.input(AppMsg::ContinuePendingAction);
                 }
                 crate::config::or_show_error(result);
             }
@@ -814,36 +830,102 @@ impl AppModel {
         relevant_changes(action, splits, layout)
     }
 
-    fn request_action(&self, action: PendingAction, sender: &ComponentSender<Self>) {
+    fn request_action(&mut self, action: PendingAction, sender: &ComponentSender<Self>) {
         let (splits, layout) = self.relevant_unsaved_changes(&action);
         if !splits && !layout {
             sender.input(AppMsg::ExecuteAction(action));
             return;
         }
-        let what = match (splits, layout) {
-            (true, true) => "your splits and layout",
-            (true, false) => "your splits",
-            (false, true) => "your layout",
-            (false, false) => unreachable!(),
+
+        let mut documents = VecDeque::new();
+        if splits {
+            documents.push_back(PendingDocument::Splits);
+        }
+        if layout {
+            documents.push_back(PendingDocument::Layout);
+        }
+        self.pending_action = Some(PendingActionState {
+            action,
+            documents,
+            current_document: None,
+        });
+        sender.input(AppMsg::ContinuePendingAction);
+    }
+
+    fn continue_pending_action(&mut self, sender: &ComponentSender<Self>) {
+        let Some(state) = self.pending_action.as_mut() else {
+            return;
         };
-        let dialog = gtk::AlertDialog::builder()
-            .message("Save changes before continuing?")
-            .detail(format!("There are unsaved changes to {what}."))
-            .modal(true)
-            .build();
-        dialog.set_buttons(&["Save", "Discard Changes", "Cancel"]);
-        dialog.set_cancel_button(2);
-        dialog.set_default_button(0);
+        let Some(document) = state.documents.pop_front() else {
+            let action = self.pending_action.take().unwrap().action;
+            sender.input(AppMsg::ExecuteAction(action));
+            return;
+        };
+        state.current_document = Some(document);
+
         let sender = sender.clone();
-        dialog.choose(
-            Some(&self.window),
-            gio::Cancellable::NONE,
-            move |response| match response.ok() {
-                Some(1) => sender.input(AppMsg::ExecuteAction(action)),
-                Some(0) => sender.input(AppMsg::SaveBeforeAction(action)),
-                _ => {}
-            },
-        );
+        let decided = move |decision| sender.input(AppMsg::ResolvePendingChange(decision));
+        match document {
+            PendingDocument::Splits => confirm_unsaved_splits(&self.window, decided),
+            PendingDocument::Layout => confirm_unsaved_layout(&self.window, decided),
+        }
+    }
+
+    fn resolve_pending_change(
+        &mut self,
+        decision: PendingChangeDecision,
+        sender: &ComponentSender<Self>,
+    ) {
+        match decision {
+            PendingChangeDecision::Cancel => self.pending_action = None,
+            PendingChangeDecision::Discard => {
+                if let Some(state) = self.pending_action.as_mut() {
+                    state.current_document = None;
+                }
+                sender.input(AppMsg::ContinuePendingAction);
+            }
+            PendingChangeDecision::Save => self.save_current_pending_document(sender),
+        }
+    }
+
+    fn save_current_pending_document(&self, sender: &ComponentSender<Self>) {
+        let Some(state) = self.pending_action.as_ref() else {
+            return;
+        };
+        if state.current_document == Some(PendingDocument::Splits) {
+            if self.config.borrow().can_directly_save_splits() {
+                let result = self.config.borrow_mut().save_splits(
+                    &mut self.timer.write().unwrap(),
+                    #[cfg(feature = "auto-splitting")]
+                    &self.auto_splitter,
+                );
+                crate::config::or_show_error(result);
+                if !self.timer.read().unwrap().run().has_been_modified() {
+                    sender.input(AppMsg::ContinuePendingAction);
+                }
+            } else {
+                let sender = sender.clone();
+                choose_save_path(&self.window, "Save Splits", move |path| {
+                    sender.input(AppMsg::SavePendingSplitsAs(path));
+                });
+            }
+            return;
+        }
+
+        if self.config.borrow().can_directly_save_layout() {
+            let settings = self.layout.borrow().layout.settings();
+            let result = self.config.borrow().save_layout(settings);
+            if result.is_ok() {
+                self.layout.borrow_mut().is_modified = false;
+                sender.input(AppMsg::ContinuePendingAction);
+            }
+            crate::config::or_show_error(result);
+        } else {
+            let sender = sender.clone();
+            choose_save_path(&self.window, "Save Layout", move |path| {
+                sender.input(AppMsg::SavePendingLayoutAs(path));
+            });
+        }
     }
 
     fn execute_action(&self, action: PendingAction, sender: &ComponentSender<Self>) {
@@ -865,47 +947,6 @@ impl AppModel {
                 return;
             }
         });
-    }
-
-    fn save_before_action(&self, action: PendingAction, sender: &ComponentSender<Self>) {
-        let (save_splits, save_layout) = self.relevant_unsaved_changes(&action);
-        if save_splits {
-            if self.config.borrow().can_directly_save_splits() {
-                let result = self.config.borrow_mut().save_splits(
-                    &mut self.timer.write().unwrap(),
-                    #[cfg(feature = "auto-splitting")]
-                    &self.auto_splitter,
-                );
-                crate::config::or_show_error(result);
-                if !self.timer.read().unwrap().run().has_been_modified() {
-                    sender.input(AppMsg::SaveBeforeAction(action));
-                }
-            } else {
-                let sender = sender.clone();
-                choose_save_path(&self.window, "Save Splits", move |path| {
-                    sender.input(AppMsg::SaveSplitsAsThen(path, action));
-                });
-            }
-            return;
-        }
-        if save_layout {
-            if self.config.borrow().can_directly_save_layout() {
-                let settings = self.layout.borrow().layout.settings();
-                let result = self.config.borrow().save_layout(settings);
-                if result.is_ok() {
-                    self.layout.borrow_mut().is_modified = false;
-                    sender.input(AppMsg::SaveBeforeAction(action));
-                }
-                crate::config::or_show_error(result);
-            } else {
-                let sender = sender.clone();
-                choose_save_path(&self.window, "Save Layout", move |path| {
-                    sender.input(AppMsg::SaveLayoutAsThen(path, action));
-                });
-            }
-            return;
-        }
-        sender.input(AppMsg::ExecuteAction(action));
     }
 
     fn open_settings_editor(&mut self, sender: &ComponentSender<Self>) {
