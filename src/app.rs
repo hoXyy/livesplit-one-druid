@@ -961,7 +961,6 @@ impl AppModel {
         let window = build_settings_editor(
             &self.window,
             self.config.borrow().get_mouse_pass_through_while_running(),
-            self.platform.backend(),
             &self.hotkey_availability,
             draft,
             sender,

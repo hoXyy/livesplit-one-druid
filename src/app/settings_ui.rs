@@ -3,7 +3,6 @@ use super::*;
 pub(super) fn build_settings_editor(
     parent: &gtk::ApplicationWindow,
     initial_pass_through: bool,
-    backend: crate::platform::DisplayBackend,
     hotkey_availability: &HotkeyAvailability,
     draft: Rc<RefCell<livesplit_core::HotkeyConfig>>,
     sender: &ComponentSender<AppModel>,
@@ -38,16 +37,7 @@ pub(super) fn build_settings_editor(
         .active(initial_pass_through)
         .build();
     behavior.add(&pass_through);
-    let backend_row = adw::ActionRow::builder()
-        .title("Display Backend")
-        .subtitle(match backend {
-            crate::platform::DisplayBackend::X11 => "X11 — absolute placement and always on top",
-            crate::platform::DisplayBackend::WaylandStandard => {
-                "Wayland — compositor controls placement and stacking"
-            }
-        })
-        .build();
-    behavior.add(&backend_row);
+
     page.add(&behavior);
     let group = adw::PreferencesGroup::builder()
         .title("Global Hotkeys")
